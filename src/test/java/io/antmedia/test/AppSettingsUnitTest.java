@@ -1,13 +1,19 @@
 package io.antmedia.test;
 
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.util.List;
 
 import org.junit.Test;
+import org.red5.server.Launcher;
 
 import io.antmedia.AppSettings;
 import io.antmedia.EncoderSettings;
+import io.antmedia.rest.BroadcastRestService;
 
 public class AppSettingsUnitTest {
 	
@@ -28,7 +34,7 @@ public class AppSettingsUnitTest {
 		String encoderSettingString = height1+"," + videoBitrate1 + "," + audioBitrate1
 				+ "," + height2 +"," + videoBitrate2 + "," + audioBitrate2
 				+ "," + height3 +"," + videoBitrate3 + "," + audioBitrate3;
-		List<EncoderSettings> list = appSettings.getEncoderSettingsList(encoderSettingString);
+		List<EncoderSettings> list = AppSettings.getEncoderSettingsList(encoderSettingString);
 		
 	
 		
@@ -46,6 +52,30 @@ public class AppSettingsUnitTest {
 		assertEquals(32000, list.get(2).getAudioBitrate());
 		
 		assertEquals(encoderSettingString, appSettings.getEncoderSettingsString(list));
+	}
+	
+	
+	@Test
+	public void testReadWriteSimple() {
+			Launcher launcher = new Launcher();
+			File f = new File("testFile");
+			String content = "contentntntnt";
+			launcher.writeToFile(f.getAbsolutePath(), content);
+			
+			String fileContent = launcher.getFileContent(f.getAbsolutePath());
+			
+			assertEquals(fileContent, content);
+			
+			try {
+				Files.delete(f.toPath());
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+	}
+	
+	@Test
+	public void isCommunity() {
+		assertFalse(BroadcastRestService.isEnterprise());
 	}
 
 }

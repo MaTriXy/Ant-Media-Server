@@ -1,19 +1,13 @@
 package io.antmedia.datastore.preference;
 
 import java.io.FileInputStream;
-import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.Properties;
 
 import javax.servlet.ServletContext;
 
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.core.io.ClassPathResource;
-import org.springframework.core.io.Resource;
 import org.springframework.web.context.ServletContextAware;
-import org.springframework.web.context.support.ServletContextResource;
-import org.springframework.web.context.support.ServletContextResourceLoader;
 
 public class PreferenceStore implements ServletContextAware{
 
@@ -34,6 +28,10 @@ public class PreferenceStore implements ServletContextAware{
 		Properties properties = getProperties();
 		return properties.getProperty(key);
 	}
+	
+	public void remove(String key) {
+		getProperties().remove(key);
+	}
 
 	private Properties getProperties() {
 		if (prop == null) {
@@ -43,7 +41,8 @@ public class PreferenceStore implements ServletContextAware{
 				input = new FileInputStream(fullPath);
 				prop.load(input);
 			} catch (Exception e) {
-				e.printStackTrace();
+				//e.printStackTrace();
+				//this exception may appear if file does not exist so not to log
 			}
 			finally {
 				if (input != null) {

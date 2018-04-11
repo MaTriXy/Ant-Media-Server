@@ -1,8 +1,6 @@
 package io.antmedia.webrtc;
 
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -40,7 +38,7 @@ public class WebRTCAdaptor implements IWebRTCAdaptor {
 	 * @see io.antmedia.enterprise.webrtc.IWebRTCAdaptor#deregisterMuxer(java.lang.String, io.antmedia.enterprise.webrtc.api.IWebRTCMuxer)
 	 */
 	@Override
-	public void deregisterMuxer(String streamId, IWebRTCMuxer webRTCMuxer) {
+	public void unRegisterMuxer(String streamId, IWebRTCMuxer webRTCMuxer) {
 		List<IWebRTCMuxer> list = muxerMap.get(streamId);
 		if (list != null) {
 			list.remove(webRTCMuxer);
@@ -78,10 +76,34 @@ public class WebRTCAdaptor implements IWebRTCAdaptor {
 		}
 		return result;
 	}
+	
+	
+	@Override
+	public boolean registerWebRTCClient(String streamId, IWebRTCClient webRTCClient, int resolutionHeight) {
+		boolean result = false;
+		List<IWebRTCMuxer> list = muxerMap.get(streamId);
+		if (list != null && list.size() > 0 ) 
+		{
+			for (IWebRTCMuxer iWebRTCMuxer : list) 
+			{	
+				int videoHeight = iWebRTCMuxer.getVideoHeight();
+
+				if (videoHeight == resolutionHeight) {
+					iWebRTCMuxer.registerWebRTCClient(webRTCClient);
+					result = true;
+					break;
+				}
+			}
+
+		}
+		return result;
+		
+	}
 
 	/* (non-Javadoc)
 	 * @see io.antmedia.enterprise.webrtc.IWebRTCAdaptor#deregisterWebRTCClient(java.lang.String, io.antmedia.enterprise.webrtc.api.IWebRTCClient)
 	 */
+	/*
 	@Override
 	public boolean deregisterWebRTCClient(String streamId, IWebRTCClient webRTCClient) {
 		
@@ -89,6 +111,7 @@ public class WebRTCAdaptor implements IWebRTCAdaptor {
 		return webRTCMuxer.deregisterWebRTCClient(webRTCClient);
 	
 	}
+	*/
 
 
 	/* (non-Javadoc)
@@ -107,20 +130,22 @@ public class WebRTCAdaptor implements IWebRTCAdaptor {
 	}
 
 	@Override
-	public IWebRTCMuxer getAdaptedWebRTCMuxer(String streamId, IWebRTCClient webRTCClient) {
+	public void adaptStreamingQuality(String streamId, IWebRTCClient webRTCClient) {
+		if (webRTCClient instanceof WebRTCClient) {
+			
+		}
 		List<IWebRTCMuxer> list = muxerMap.get(streamId);
 		IWebRTCMuxer currentlyRegisteredMuxer = webRTCClient.getWebRTCMuxer();
 		IWebRTCMuxer adaptedMuxer = null;
 		int bitrate = webRTCClient.getTargetBitrate();
-		int currentBitrateDiff = bitrate - currentlyRegisteredMuxer.getVideoBitrate();;
+		int currentBitrateDiff = bitrate - (currentlyRegisteredMuxer.getVideoBitrate() + currentlyRegisteredMuxer.getAudioBitrate());
 
-		
 		for (Iterator<IWebRTCMuxer> iterator = list.iterator(); iterator.hasNext();) {
 			IWebRTCMuxer iWebRTCMuxer = iterator.next();
 
-			int bitrate_diff = bitrate - iWebRTCMuxer.getVideoBitrate();
+			int bitrate_diff = bitrate - (iWebRTCMuxer.getVideoBitrate() + iWebRTCMuxer.getAudioBitrate());
 			
-			if (bitrate_diff > 0 && bitrate_diff < currentBitrateDiff) {
+			if (bitrate_diff > 0 && ((bitrate_diff < currentBitrateDiff) || currentBitrateDiff < 0)) {
 				currentBitrateDiff = bitrate_diff;
 				adaptedMuxer = iWebRTCMuxer;
 			}
@@ -129,16 +154,21 @@ public class WebRTCAdaptor implements IWebRTCAdaptor {
 		
 		if (adaptedMuxer != null && !currentlyRegisteredMuxer.equals(adaptedMuxer)) {
 			// switch muxer if current registered muxer and adaptedMuxer are different
-			logger.info(" switching muxer for the stream id: " + streamId);
-			return adaptedMuxer;
-			//currentlyRegisteredMuxer.deregisterWebRTCClient(webRTCClient);
-			// adaptedMuxer.registerWebRTCClient(webRTCClient);
+			logger.info(" switching muxer for the stream id: " + streamId 
+									+ " adapted muxer video bitrate: " + adaptedMuxer.getVideoBitrate()
+									+ " audio bitrate: " + adaptedMuxer.getAudioBitrate()
+									+ " webrtc client target bitrate: " + bitrate);
+			currentlyRegisteredMuxer.unRegisterWebRTCClient(webRTCClient);
+			adaptedMuxer.registerWebRTCClient(webRTCClient);
 		}
 		else {
 			//same muxer, do not switch
-			logger.info("not switching muxer because they are same with stream id: " + streamId);
+			logger.info("not found a more suitable adapted muxer for " + streamId
+							+ " current muxer video bitrate: " + currentlyRegisteredMuxer.getVideoBitrate()
+							+ " audio bitrate: " + currentlyRegisteredMuxer.getAudioBitrate()
+							+ " webrtc client target bitrate: " + bitrate);
 		}
-		return null;
+		
 
 	}
 
