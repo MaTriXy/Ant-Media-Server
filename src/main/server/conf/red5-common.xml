@@ -31,15 +31,6 @@
     <!-- Deals with StatusObjects representing statuses like NetConnection.Connect.Success status -->
     <bean id="statusObjectService" class="org.red5.server.net.rtmp.status.StatusObjectService" autowire="byType" /> 
 
-    <!-- RTMPT codec factory -->
-    <bean id="rtmptCodecFactory" class="org.red5.server.net.rtmpt.codec.RTMPTCodecFactory" autowire="byType" init-method="init">
-        <property name="baseTolerance" value="${rtmpt.encoder_base_tolerance}" />
-        <property name="dropLiveFuture" value="${rtmpt.encoder_drop_live_future}" />
-    </bean>
-
-    <!-- Remoting calls codec factory -->
-    <bean id="remotingCodecFactory" class="org.red5.server.net.remoting.codec.RemotingCodecFactory" autowire="byType" init-method="init"/>
-
     <!-- Streamable file factory -->
     <bean id="streamableFileFactory" class="org.red5.server.stream.StreamableFileFactory">
         <property name="services">
@@ -47,26 +38,7 @@
                 <bean id="flvFileService" class="org.red5.server.service.flv.impl.FLVService">
                     <property name="generateMetadata" value="true"/>
                 </bean>
-                <bean id="mp3FileService" class="org.red5.server.service.mp3.impl.MP3Service"/>
-                <bean id="mp4FileService" class="org.red5.server.service.mp4.impl.MP4Service"/>
-                <bean id="m4aFileService" class="org.red5.server.service.m4a.impl.M4AService"/>
             </list>
-        </property>
-    </bean>
-
-    <!-- Handles creation / lookup of shared objects -->
-    <bean id="sharedObjectService" class="org.red5.server.so.SharedObjectService">
-        <property name="maximumEventsPerUpdate" value="${so.max.events.per.update}"/>
-        <property name="persistenceClassName">
-            <value>org.red5.server.persistence.FilePersistence</value>
-        </property>
-        <property name="scheduler">
-            <bean class="org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler">
-                <property name="poolSize" value="${so.scheduler.pool_size}" />  
-                <property name="waitForTasksToCompleteOnShutdown" value="false"/>
-                <property name="daemon" value="true"/>
-                <property name="threadNamePrefix" value="SharedObjectScheduler-"/>
-            </bean>
         </property>
     </bean>
 
@@ -82,11 +54,6 @@
     <!-- Scheduling service -->
     <bean id="schedulingService" class="org.red5.server.scheduling.QuartzSchedulingService">
         <property name="configFile" value="${red5.root}/conf/quartz.properties"/>   
-    </bean>
-
-    <!-- Use injection to setup thread pool for remoting clients -->
-    <bean id="remotingClient" class="org.red5.server.net.remoting.RemotingClient">
-        <property name="poolSize" value="1"/>
     </bean>
 
     <!--
@@ -122,55 +89,7 @@
     <bean id="keyframe.cache" class="org.red5.io.CachingFileKeyFrameMetaCache">
         <property name="maxCacheEntry" value="${keyframe.cache.entry.max}" />
     </bean>
-
-    <!--
-        Represents FLV files
-        Use injection to set the cache impl to be used with flvs
-    -->
-    <bean id="flv.impl" class="org.red5.io.flv.impl.FLV">
-        <property name="cache">
-            <ref bean="object.cache"/>
-        </property>
-        <!-- Writer post-process example -->
-        <!-- 
-        <property name="writerPostProcessor" value="org.red5.media.processor.GenericWriterPostProcessor" />
-        -->
-    </bean>
-
-    <!-- Use injection to set the keyframe cache for FLV files -->
-    <bean id="flvreader.impl" class="org.red5.io.flv.impl.FLVReader">
-        <property name="keyFrameCache">
-            <ref bean="keyframe.cache"/>
-        </property>
-    </bean>
-
-    <!-- Use injection to set the keyframe cache for MP4 files -->
-    <bean id="mp4reader.impl" class="org.red5.io.mp4.impl.MP4Reader"/>
-    
-    <!-- Use injection to set the keyframe cache for MP3 files -->
-    <bean id="mp3reader.impl" class="org.red5.io.mp3.impl.MP3Reader">
-        <property name="frameCache">
-            <ref bean="keyframe.cache"/>
-        </property>
-    </bean> 
-
-    <!-- Use injection to set the buffer type for reading FLV files -->
-    <bean class="org.springframework.beans.factory.config.MethodInvokingFactoryBean">
-        <property name="staticMethod">
-            <value>org.red5.io.flv.impl.FLVReader.setBufferType</value>
-        </property>
-        <!-- Three buffer types are available 'auto', 'heap', and 'direct' -->
-        <property name="arguments" value="auto"/>
-    </bean>
-
-    <!-- Use injection to set the buffer size for reading FLV files -->
-    <bean class="org.springframework.beans.factory.config.MethodInvokingFactoryBean">
-        <property name="staticMethod">
-            <value>org.red5.io.flv.impl.FLVReader.setBufferSize</value>
-        </property>
-        <!-- Three buffer types are available 'auto', 'heap', and 'direct' -->
-        <property name="arguments" value="4096"/>
-    </bean>
+  
 
     <!-- Low level access for recording to file -->
     <bean id="fileConsumer" scope="prototype" lazy-init="true" class="org.red5.server.stream.consumer.FileConsumer">
@@ -202,15 +121,50 @@
         <property name="automaticHlsRecording" value="${broadcastream.auto.record.hls}"/>
     </bean>
     
-    <!-- Cluster Related -->
-	<bean id="remoteBroadcastStream" scope="prototype" lazy-init="true" class="org.red5.server.stream.RemoteBroadcastStream">
-        <property name="automaticRecording" value="false"/>
-        <property name="automaticMp4Recording" value="false"/>
-        <property name="automaticHlsRecording" value="false"/>
-        <!--  
-        <property name="scheduler" ref="rtmpScheduler" />
-        -->
+    <bean id="vertxMetricOptions" class="io.vertx.ext.dropwizard.DropwizardMetricsOptions">
+        <property name="enabled" value="true"/>        
     </bean>
+    
+    <bean id="vertxCore" 
+    		class="io.vertx.core.Vertx" 
+   		factory-method="vertx">
+   		<constructor-arg>
+   			<bean class="io.vertx.core.VertxOptions">
+				<!-- we set these values to be compatible with max rtmp.executor.max_pool_size pool size because there may be some memory issues about that-->
+   				<property name="eventLoopPoolSize" value="128"></property>
+   				<property name="workerPoolSize" value="128"></property>
+				<property name="metricsOptions" ref="vertxMetricOptions"></property>
+				<property name="maxWorkerExecuteTime" value="10000000000"></property> <!--  make max worker execute time 10 seconds -->
+   			</bean>
+   		</constructor-arg>	
+   		<!--    * The default number of event loop threads to be used  = 2 * number of cores on the machine -->
+    </bean>
+    
+    <bean id="webRTCVertx" class="io.vertx.core.Vertx" factory-method="vertx">
+    	<constructor-arg>
+    		<bean class="io.vertx.core.VertxOptions">
+    			<!-- we set these values to be compatible with max rtmp.executor.max_pool_size pool size because there may be some memory issues about that-->
+
+    			<property name="eventLoopPoolSize" value="128"></property>
+   				<property name="workerPoolSize" value="128"></property>
+    			<property name="metricsOptions" ref="vertxMetricOptions"></property>
+    			<property name="maxWorkerExecuteTime" value="2000000000"></property> <!-- make max worker execute time 2 seconds -->
+    		</bean>
+    	</constructor-arg>
+    </bean>
+   	
+   	<bean id="statsCollector" class="io.antmedia.statistic.StatsCollector" init-method="start">
+   	   <property name="cpuLimit" value="${server.cpu_limit}"/>
+       <property name="kafkaBrokers" value="${server.kafka_brokers}" />
+       <property name="minFreeRamSize" value="${server.min_free_ram}"/>
+
+       <property name="memoryLimit" value="${server.memory_limit_percentage:75}" />
+   	</bean>
+   	
+    <bean id="srtAdaptor" class="#{ T(io.antmedia.rest.RestServiceBase).isEnterprise() ? 'io.antmedia.enterprise.srt.SRTAdaptor' : 'io.antmedia.srt.SRTAdaptor' }">
+	</bean>
+   	
+   	
     
 
 </beans>

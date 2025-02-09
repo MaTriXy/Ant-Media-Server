@@ -3,15 +3,15 @@ package io.antmedia.ipcamera;
 import java.net.ConnectException;
 import java.util.List;
 
-import javax.xml.soap.SOAPException;
+import jakarta.xml.soap.SOAPException;
 
+import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.onvif.ver10.schema.AutoFocusMode;
-import org.onvif.ver10.schema.Date;
-import org.onvif.ver10.schema.DateTime;
 import org.onvif.ver10.schema.FocusConfiguration20;
 import org.onvif.ver10.schema.ImagingSettings20;
 import org.onvif.ver10.schema.Profile;
-import org.onvif.ver10.schema.Time;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import io.antmedia.ipcamera.onvif.soap.OnvifDevice;
 import io.antmedia.ipcamera.onvif.soap.devices.PtzDevices;
@@ -22,157 +22,163 @@ public class OnvifCamera implements IOnvifCamera {
 	PtzDevices ptzDevices;
 	List<Profile> profiles;
 
+	public static final int CONNECTION_SUCCESS = 0;
+	public static final int CONNECT_ERROR = -1;
+	public static final int AUTHENTICATION_ERROR = -2;
 	String profileToken;
+	private static final String HTTP_PREFIX = "http://";
+	private static final String HTTPS_PREFIX = "https://";
+
+
+
+	protected static Logger logger = LoggerFactory.getLogger(OnvifCamera.class);
 
 	@Override
-	public boolean connect(String address, String username, String password) {
-		boolean result = false;
+	public int connect(String address, String username, String password) {
+		int result = CONNECT_ERROR;
+		String camIP = "";
 		try {
-			nvt = new OnvifDevice(address, username, password);
+
+			//address may include http:// or https:// so get the IPAddress directly
+			camIP = getIPAddress(address);
+
+			String protocol = getProtocol(address);
+			
+			nvt = new OnvifDevice(camIP, protocol, username, password);
+			nvt.getSoap().setLogging(false);
 			nvt.getDevices().getCapabilities().getDevice();
 			nvt.getDevices().getServices(false);
 			ptzDevices = nvt.getPtz();
 			profiles = nvt.getDevices().getProfiles();
-			profileToken = profiles.get(0).getToken();
-			result = true;
-		} catch (ConnectException e) {
-			e.printStackTrace();
-			result = false;
-		} catch (SOAPException e) {
-			e.printStackTrace();
-			result = false;
+
+
+			if (profiles != null)
+			{
+				for (Profile profile : profiles) {
+					if (profile.getPTZConfiguration() != null) {
+						profileToken = profile.getToken();
+						break;
+					}
+				}
+				if (profileToken == null) {
+					profileToken = profiles.get(0).getToken();
+				}
+
+				result = CONNECTION_SUCCESS;
+			}
+			else {
+				//it is likely authentication error but maybe something else
+				//inform user to check username and password
+				result = AUTHENTICATION_ERROR;
+			}
+
+		} catch (ConnectException | SOAPException e) {
+
+			//connection error. Let the user check ip address
+			logger.error(ExceptionUtils.getStackTrace(e));
+			result = CONNECT_ERROR;
 		}
 		return result;
+	}
+
+	public String getProtocol(String address) {
+		String protocol = null;
+		if (address.startsWith(HTTP_PREFIX)) 
+		{
+			protocol = "http";
+		}
+		else if (address.startsWith(HTTPS_PREFIX)) 
+		{
+			protocol = "https";
+		}
+		return protocol;
+	}
+
+	@Override
+	public String[] getProfiles() {
+		String[] profilesStr = null;
+		try {
+			List<Profile> profilesLocal = nvt.getDevices().getProfiles();
+
+			if (profilesLocal != null)
+			{
+				int i = 0;
+				profilesStr = new String[profilesLocal.size()];
+				for (Profile profile : profilesLocal) {
+					profilesStr[i++] = nvt.getMedia().getRTSPStreamUri(profile.getToken());
+				}
+			}
+		} catch (ConnectException | SOAPException e) {
+			// nothing to do
+		}
+		return profilesStr;
 	}
 
 	@Override
 	public void disconnect() {
 		// nvt.getDevices().;
-		// TODO Auto-generated method stub
 
 	}
 
 	@Override
 	public String getRTSPStreamURI() {
-		String PTSPURL = null;
+		String rtspURL = null;
 
 		try {
-			PTSPURL = nvt.getMedia().getRTSPStreamUri(profileToken);
+			rtspURL = nvt.getMedia().getRTSPStreamUri(profileToken);
 
-		} catch (NullPointerException e) {
-			PTSPURL = "no";
-			e.printStackTrace();
-
-		} catch (SOAPException e) {
-			PTSPURL = "no";
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		} catch (ConnectException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
+		} catch (NullPointerException | ConnectException | SOAPException e) {
+			logger.error(ExceptionUtils.getStackTrace(e));
 		}
-		return PTSPURL;
+		return rtspURL;
 	}
 
 	@Override
 	public String getTCPStreamURI() {
-		String PTSPURL = null;
+		String rtspURL = null;
 
 		try {
-			PTSPURL = nvt.getMedia().getTCPStreamUri(profileToken);
+			rtspURL = nvt.getMedia().getTCPStreamUri(profileToken);
 
-		} catch (ConnectException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		} catch (SOAPException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
+		} catch (ConnectException | SOAPException e) {
+			logger.error(ExceptionUtils.getStackTrace(e));
 		}
-		return PTSPURL;
+		return rtspURL;
+	}
+
+
+	public boolean moveContinous(float x, float y, float zoom) {
+		return ptzDevices.continuousMove(profileToken, x, y, zoom);
+	}
+
+	public boolean moveRelative(float x, float y, float zoom) {
+		return ptzDevices.relativeMove(profileToken, x, y, zoom);
+	}
+
+	public boolean moveAbsolute(float x, float y, float zoom) {
+		boolean result = false;
+		try {
+			result = ptzDevices.absoluteMove(profileToken, x, y, zoom);
+		}
+		catch (SOAPException e) {
+			result = false;
+			logger.error(ExceptionUtils.getStackTrace(e));
+		}
+		return result;
 	}
 
 	@Override
-	public boolean MoveUp() {
-
-		ptzDevices.relativeMove(profileToken, 0f, 0.1f, 0f);
-
-		try {
-			Thread.sleep(500);
-
-			ptzDevices.stopMove(profileToken);
-		} catch (InterruptedException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-			Thread.currentThread().interrupt();
-		}
-		return true;
-	}
-
-	@Override
-	public boolean MoveDown() {
-
-		ptzDevices.relativeMove(profileToken, 0f, -0.1f, 0f);
-		try {
-			Thread.sleep(500);
-
-			ptzDevices.stopMove(profileToken);
-		} catch (InterruptedException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-			Thread.currentThread().interrupt();
-		}
-
-		return true;
-	}
-
-	@Override
-	public boolean MoveRight() {
-		ptzDevices.relativeMove(profileToken, 1f, 0f, 0f);
-
-		try {
-			Thread.sleep(500);
-
-			ptzDevices.stopMove(profileToken);
-		} catch (InterruptedException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-			Thread.currentThread().interrupt();
-		}
-
-		return true;
-	}
-
-	@Override
-	public boolean MoveLeft() {
-		ptzDevices.relativeMove(profileToken, -1f, 0f, 0f);
-		try {
-			Thread.sleep(500);
-
-			ptzDevices.stopMove(profileToken);
-		} catch (InterruptedException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-			Thread.currentThread().interrupt();
-		}
-
-		return true;
-	}
-
-	@Override
-	public boolean MoveStop() {
-		ptzDevices.stopMove(profileToken);
-		return true;
+	public boolean moveStop() {
+		return ptzDevices.stopMove(profileToken);
 	}
 
 	@Override
 	public String getAlarms() {
-		// TODO Auto-generated method stub
 		return null;
 	}
 
 	@Override
 	public boolean enableDhcp() {
-		// TODO Auto-generated method stub
 		// .setDHCP
 		// IPv4NetworkInterfaceSetConfiguration.java
 		return false;
@@ -180,7 +186,6 @@ public class OnvifCamera implements IOnvifCamera {
 
 	@Override
 	public boolean disableDhcp(String ipaddress, String netmask, String gateway) {
-		// TODO Auto-generated method stub
 		return false;
 	}
 
@@ -189,39 +194,9 @@ public class OnvifCamera implements IOnvifCamera {
 		return nvt.getDate();
 	}
 
-	public boolean setDateTime(Date date, Time time) {
-
-		DateTime dt = new DateTime();
-
-		/*
-		 * Date date = new Date();
-		 * 
-		 * date.setDay(1);
-		 * 
-		 * date.setMonth(1);
-		 * 
-		 * date.setYear(2005);
-		 * 
-		 * 
-		 * Time time = new Time();
-		 * 
-		 * time.setHour(10);
-		 * 
-		 * time.setMinute(10);
-		 * 
-		 * time.setSecond(10);
-		 */
-
-		dt.setDate(date);
-
-		dt.setTime(time);
-
-		return true;
-	}
 
 	@Override
 	public boolean setBrightness(float brightness) {
-		// TODO Auto-generated method stub
 		ImagingSettings20 image_set = nvt.getImaging().getImagingSettings(profileToken);
 		image_set.setBrightness(brightness);
 		return true;
@@ -229,14 +204,12 @@ public class OnvifCamera implements IOnvifCamera {
 
 	@Override
 	public float getBrightness() {
-		// TODO Auto-generated method stub
 		ImagingSettings20 image_set = nvt.getImaging().getImagingSettings(profileToken);
 		return image_set.getBrightness();
 	}
 
 	@Override
 	public boolean setSaturation(float saturation) {
-		// TODO Auto-generated method stub
 		ImagingSettings20 image_set = nvt.getImaging().getImagingSettings(profileToken);
 		image_set.setColorSaturation(saturation);
 		return true;
@@ -244,14 +217,12 @@ public class OnvifCamera implements IOnvifCamera {
 
 	@Override
 	public float getSaturation() {
-		// TODO Auto-generated method stub
 		ImagingSettings20 image_set = nvt.getImaging().getImagingSettings(profileToken);
 		return image_set.getColorSaturation();
 	}
 
 	@Override
 	public boolean setContrast(float contrast) {
-		// TODO Auto-generated method stub
 		ImagingSettings20 image_set = nvt.getImaging().getImagingSettings(profileToken);
 		image_set.setContrast(contrast);
 		return true;
@@ -259,14 +230,12 @@ public class OnvifCamera implements IOnvifCamera {
 
 	@Override
 	public float getContrast() {
-		// TODO Auto-generated method stub
 		ImagingSettings20 image_set = nvt.getImaging().getImagingSettings(profileToken);
 		return image_set.getContrast();
 	}
 
 	@Override
 	public boolean setSharpness(float sharpness) {
-		// TODO Auto-generated method stub
 		ImagingSettings20 image_set = nvt.getImaging().getImagingSettings(profileToken);
 		image_set.setSharpness(sharpness);
 		return true;
@@ -274,18 +243,16 @@ public class OnvifCamera implements IOnvifCamera {
 
 	@Override
 	public float getSharpness() {
-		// TODO Auto-generated method stub
 		ImagingSettings20 image_set = nvt.getImaging().getImagingSettings(profileToken);
 		return image_set.getSharpness();
 	}
 
 	@Override
 	public boolean setFocusMode(boolean auto) {
-		// TODO Auto-generated method stub
 		ImagingSettings20 image_set = nvt.getImaging().getImagingSettings(profileToken);
 		FocusConfiguration20 focus = image_set.getFocus();
 		AutoFocusMode foc_mode;
-		if (auto == true)
+		if (auto)
 			foc_mode = AutoFocusMode.fromValue("AUTO");
 		else
 			foc_mode = AutoFocusMode.fromValue("MANUAL");
@@ -297,19 +264,46 @@ public class OnvifCamera implements IOnvifCamera {
 
 	@Override
 	public boolean isFocusModeAuto() {
-		// TODO Auto-generated method stub
 		ImagingSettings20 image_set = nvt.getImaging().getImagingSettings(profileToken);
 		FocusConfiguration20 focus = image_set.getFocus();
-		if (focus.getAutoFocusMode().value() == "AUTO")
-			return true;
-		else
-			return false;
+		return "AUTO".equals(focus.getAutoFocusMode().value());
 	}
 
 	@Override
 	public boolean setDateTime(java.sql.Date date, java.sql.Time time) {
-		// TODO Auto-generated method stub
 		return false;
+	}
+
+	public String getIPAddress (String url) {
+
+		String[] ipAddrParts = null;
+		String ipAddr = url;
+
+		if(url != null && (url.startsWith(HTTP_PREFIX) ||
+				url.startsWith("https://") ||
+				url.startsWith("rtmp://") ||
+				url.startsWith("rtmps://") ||
+				url.startsWith("rtsp://"))) 
+		{
+
+			ipAddrParts = url.split("//");
+			ipAddr = ipAddrParts[1];
+		}
+		if (ipAddr != null) 
+		{
+			if (ipAddr.contains("/")){
+				ipAddrParts = ipAddr.split("/");
+				ipAddr = ipAddrParts[0];
+			}
+			logger.info("IP: {}", ipAddr);
+
+
+		}
+		return ipAddr;
+	}
+
+	public void setNvtForTest(OnvifDevice nvt) {
+		this.nvt = nvt;
 	}
 
 }

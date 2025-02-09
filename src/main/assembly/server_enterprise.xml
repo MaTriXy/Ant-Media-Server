@@ -2,7 +2,7 @@
 	xmlns="http://maven.apache.org/plugins/maven-assembly-plugin/assembly/1.1.3"
 	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
 	xsi:schemaLocation="http://maven.apache.org/plugins/maven-assembly-plugin/assembly/1.1.3 http://maven.apache.org/xsd/assembly-1.1.3.xsd">
-	<id>enterprise-${project.version}-${buildNumber}</id>
+	<id>enterprise${enterprise.profile}-${project.version}-${buildNumber}</id>
 	<formats>
 	<!-- 
 		<format>tar.gz</format>
@@ -11,9 +11,14 @@
 	</formats>
 	<files>
 		<file>
-			<source>${project.build.directory}/${finalName}.jar</source>
+			<source>${project.build.directory}/${finalName}-server.jar</source>
 			<outputDirectory></outputDirectory>
 			<destName>ant-media-server.jar</destName>
+		</file>
+		<file>
+			<source>${project.build.directory}/${finalName}-service.jar</source>
+			<outputDirectory></outputDirectory>
+			<destName>ant-media-server-service.jar</destName>
 		</file>
 	</files>
 	<fileSets>
@@ -24,10 +29,7 @@
 				<include>license.txt</include>
 			</includes>
 		</fileSet>
-		<fileSet>
-			<directory>${project.build.directory}/ant-media-server-service-${ant-media-server-service.version}</directory>
-			<outputDirectory></outputDirectory>
-		</fileSet>
+
 		<fileSet>
 			<directory>${project.build.directory}/lib</directory>
 			<outputDirectory>lib</outputDirectory>
@@ -37,7 +39,6 @@
 			<excludes>
 				<exclude>ecj-*.jar</exclude>
 				<exclude>tomcat-*.jar</exclude>
-				<exclude>tomcatplugin-*.jar</exclude>
 				<exclude>websocket-*.jar</exclude>
 				<exclude>antlr-2.7.7.jar</exclude>
 				<exclude>asm-analysis-4.0.jar</exclude>
@@ -50,13 +51,18 @@
 				<exclude>servlet-api-*.jar</exclude>
 				<exclude>junit-${junit.version}.jar</exclude>
 				<exclude>logback-access-*.jar</exclude>
-				<exclude>ant-media-server-service-${ant-media-server-service.version}.jar</exclude>
 				<exclude>red5-server-${red5-service.version}.jar</exclude>
+				<exclude>red5-server-common-*.jar</exclude>
 				<exclude>red5-server-1*.jar</exclude>
 				<exclude>red5-service-*.jar</exclude>
-				<exclude>ant-media-server-*.jar</exclude>
 				<exclude>ffmpeg-*.jar</exclude>
 				<exclude>javacpp-*.jar</exclude>
+				<exclude>cuda-*.jar</exclude>
+				<exclude>ant-media-enterprise*.jar</exclude>
+				<exclude>ant-media-filter-plugin*.jar</exclude>
+				<exclude>libtensorflow*.jar</exclude>
+				<exclude>tensorflow*.jar</exclude>
+				<exclude>srt*.jar</exclude>
 			</excludes>
 		</fileSet>
 		<fileSet>
@@ -78,21 +84,38 @@
 				<exclude>cors-filter-*.jar</exclude>
 				<exclude>java-property-utils-*.jar</exclude>
 				<exclude>red5-service-*.jar</exclude>
+				<exclude>libtensorflow*.jar</exclude>
+				<exclude>tensorflow*.jar</exclude>
+				<exclude>commons-lang*.jar</exclude>
+				<exclude>protobuf-java*.jar</exclude>
 				
 				<!-- Below libs are generic we need custom builds which are under src/main/server/plugins 
 				and they will copied later in this file -->
-				<exclude>ffmpeg*linux*.jar</exclude>
+				<exclude>ffmpeg*linux-x86.jar</exclude>
+				<exclude>ffmpeg*linux-armhf.jar</exclude> 
 				<exclude>ffmpeg*android*.jar</exclude>
-				<exclude>ffmpeg*macosx*.jar</exclude>
 				<exclude>ffmpeg*ppc64le.jar</exclude>
 				<exclude>ffmpeg*windows*.jar</exclude>
+				<exclude>javacpp*android*.jar</exclude>
+				<exclude>ffmpeg*gpl.jar</exclude>
+				<exclude>javacpp*ios*.jar</exclude>
+				<exclude>javacpp*linux-x86.jar</exclude>
+				<exclude>javacpp*linux-armhf.jar</exclude>
+				<exclude>javacpp*linux-ppc64le.jar</exclude>
+				<exclude>javacpp*windows*.jar</exclude>	
+				<exclude>cuda*ppc64le.jar</exclude>
+				<exclude>cuda*macosx*.jar</exclude>
+				<exclude>cuda*windows*.jar</exclude>
+				
+
 			</excludes>
 		</fileSet>
 		<fileSet>
 			<directory>${project.basedir}/src/main/server</directory>
 			<outputDirectory></outputDirectory>
 			<includes>
-				<include>*.bat</include>
+				<include>antmedia.service</include>
+				<include>antmedia</include>
 			</includes>
 		</fileSet>
 		<fileSet>
@@ -113,13 +136,13 @@
 				<include>*.policy</include>
 				<include>*.globals</include>
 				<include>*.jmx</include>
+				<include>*.json</include>
+				<include>*.sh</include>
 			</includes>
-			<excludes>
-				<exclude>build_standalone.properties</exclude>
-			</excludes>
 		</fileSet>
 		
 		<!--  Copy Custom Build Plugins  -->
+		<!-- 
 		<fileSet>
 			<directory>${project.basedir}/src/main/server/plugins</directory>
 			<outputDirectory>plugins</outputDirectory>
@@ -127,15 +150,28 @@
 				<include>*.jar</include>
 			</includes>
 		</fileSet>
-		
+		 -->
+		 
 		<!-- NATIVE LIBRARIES -->
 		<fileSet>
-			<directory>${project.basedir}/src/main/server/lib/native</directory>
-			<outputDirectory>lib/native</outputDirectory>
+			<directory>${project.basedir}/src/main/server/lib/native-mac</directory>
+			<outputDirectory>lib/native-mac</outputDirectory>
 			<includes>
-				<include>*.dylib</include>
-				<include>*.so</include>
-				<include>*.dll</include>
+				<include>*</include>
+			</includes>
+		</fileSet>
+		<fileSet>
+			<directory>${project.basedir}/src/main/server/lib/native-linux-x86_64</directory>
+			<outputDirectory>lib/native-linux-x86_64</outputDirectory>
+			<includes>
+				<include>*</include>
+			</includes>
+		</fileSet>
+		<fileSet>
+			<directory>${project.basedir}/src/main/server/lib/native-linux-aarch64</directory>
+			<outputDirectory>lib/native-linux-aarch64</outputDirectory>
+			<includes>
+				<include>*</include>
 			</includes>
 		</fileSet>
 		<fileSet>
@@ -160,12 +196,25 @@
 			</includes>
 		</fileSet>
 		
-		<!-- Copy War files -->
+		<!-- Copy webapps  -->
 		<fileSet>
 			<directory>${project.build.directory}/webapps</directory>
 			<outputDirectory>webapps</outputDirectory>
+		</fileSet>
+				<fileSet>
+			<directory>${project.build.directory}</directory>
+			<outputDirectory></outputDirectory>
 			<includes>
 				<include>*.war</include>
+			</includes>
+		</fileSet>
+
+		<!-- Readme File-->
+		<fileSet>
+			<directory>${project.basedir}</directory>
+			<outputDirectory></outputDirectory>
+			<includes>
+				<include>README.md</include>
 			</includes>
 		</fileSet>
 	</fileSets>

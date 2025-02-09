@@ -24,104 +24,79 @@
 		value="org.apache.coyote.http11.Http11Protocol" /> Non-blocking I/O: <property 
 		name="protocol" value="org.apache.coyote.http11.Http11NioProtocol" /> -->
 
-<!-- 
+	<!-- Let the tomcat.cluster depends on warDeployer to make sure it's initialized before tomcat.server which depends on warDeployer -->
+	<!-- cluster start
 	<bean id="tomcat.cluster" class="io.antmedia.enterprise.cluster.TcpCluster">
-		<constructor-arg>
-			<list>
-				<bean class="org.apache.catalina.ha.tcp.ReplicationValve">
-					<property name="filter"
-						value=".*\.gif|.*\.js|.*\.jpeg|.*\.jpg|.*\.png|.*\.htm|.*\.html|.*\.css|.*\.txt" />
-				</bean>
-			</list>
-		</constructor-arg>
-		<constructor-arg>
-			<list>
-				<bean name="deltaManager" class="org.apache.catalina.ha.session.DeltaManager">
-					<property name="name" value="deltaManager" />
-					<property name="expireSessionsOnShutdown" value="false" />
-					<property name="notifyListenersOnReplication" value="true" />
-				</bean>
-			</list>
-		</constructor-arg>
-		<constructor-arg>
-			<list>
-				<bean class="io.antmedia.enterprise.cluster.ClusterMessageListener" />
-			</list>
-		</constructor-arg>
-		<property name="clusterName" value="ant-media-server-cluster-1" />
-		<property name="channel">
-			<bean class="io.antmedia.enterprise.cluster.ClusterGroupChannel">
-				<constructor-arg>
-					<list>
-						<bean
-							class="org.apache.catalina.tribes.group.interceptors.TcpFailureDetector" />
-						<bean
-							class="org.apache.catalina.tribes.group.interceptors.MessageDispatchInterceptor" />
-						<bean
-							class="org.apache.catalina.tribes.group.interceptors.ThroughputInterceptor" />
-					</list>
-				</constructor-arg>
-				<constructor-arg>
-					<list>
-						<bean class="io.antmedia.enterprise.cluster.ClusterMemberListener" />
-					</list>
-				</constructor-arg>
-				<constructor-arg>
-					<list>
-						<bean class="io.antmedia.enterprise.cluster.ClusterChannelListener" />
-					</list>
-				</constructor-arg>
-				<property name="membershipService">
-					<bean class="org.apache.catalina.tribes.membership.McastService">
-						<property name="address" value="228.0.0.4" />
-						<property name="port" value="45564" />
-						<property name="frequency" value="500" />
-						<property name="dropTime" value="3000" />
-					</bean>
-				</property>
-				<property name="channelSender">
-					<bean class="org.apache.catalina.tribes.transport.ReplicationTransmitter">
-						<property name="transport">
-							<bean
-								class="org.apache.catalina.tribes.transport.nio.PooledParallelSender" />
-						</property>
-					</bean>
-				</property>
-				<property name="channelReceiver">
-					<bean class="org.apache.catalina.tribes.transport.nio.NioReceiver">
-						<property name="address" value="auto" />
-						<property name="port" value="5000" />
-						<property name="selectorTimeout" value="100" />
-						<property name="maxThreads" value="6" />
-					</bean>
-				</property>
+		<property name="clusterStore">
+			<bean class="io.antmedia.enterprise.cluster.ClusterStore">
+				<constructor-arg value="${clusterdb.host}" />
+				<constructor-arg value="${clusterdb.user}" />
+				<constructor-arg value="${clusterdb.password}" />
 			</bean>
 		</property>
 	</bean>
-	-->
-
+	
+	cluster end -->
 
 
 	<!-- Tomcat without SSL enabled -->
 	<bean id="tomcat.server" class="org.red5.server.tomcat.TomcatLoader"
 		depends-on="context.loader,warDeployer" lazy-init="true">
-		<!-- <property name="cluster" ref="tomcat.cluster" /> -->
+		<!--  We've add following fields to make sure tomcat.cluster is initialized before TomcatLoader in cluster mode otherwise there maybe initialization exceptions -->
+		<!-- cluster start
+		<property name="clusterNotifier" ref="tomcat.cluster" />
+		cluster end -->
 		<property name="webappFolder" value="${red5.root}/webapps" />
 
 		<property name="connectors">
 			<list>
 				<bean name="httpConnector" class="org.red5.server.tomcat.TomcatConnector">
 					<property name="protocol"
-						value="org.apache.coyote.http11.Http11NioProtocol" />
+						value="org.apache.coyote.http11.Http11Nio2Protocol" />
 					<property name="address" value="${http.host}:${http.port}" />
 					<property name="redirectPort" value="${https.port}" />
+					<property name="upgradeHttp2Protocol" value="${http.upgradeHttp2Protocol:true}" />
 					<property name="connectionProperties">
 						<map>
 							<entry key="maxKeepAliveRequests" value="${http.max_keep_alive_requests}" />
 							<entry key="keepAliveTimout" value="-1" />
+							<entry key="useExecutor" value="true"/> 
+							<entry key="maxThreads" value="${http.max_threads}"/> 
+							<entry key="acceptorThreadCount" value="${http.acceptor_thread_count}"/> 
+							<entry key="processorCache" value="${http.processor_cache}"/> 
+							<entry key="relaxedQueryChars" value="{}" />
 						</map>
 					</property>
 				</bean>
+				<!-- https start
+				<bean name="httpsConnector" class="org.red5.server.tomcat.TomcatConnector"> 
+						<property name="secure" value="true" /> 
+						<property name="protocol" value="org.apache.coyote.http11.Http11Nio2Protocol"/> 
+						<property name="address" value="${http.host}:${https.port}" /> 
+						<property name="redirectPort" value="${http.port}" /> 
+						<property name="upgradeHttp2Protocol" value="${http.upgradeHttp2Protocol:true}" />
+
+						<property name="connectionProperties"> 
+							<map> 
+				                                <entry key="sslEnabledProtocols" value="TLSv1.2" />
+				                                <entry key="SSLEnabled" value="true" />
+				                                <entry key="useServerCipherSuitesOrder" value="true" />
+				                                <entry key="ciphers" value="TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_DHE_RSA_WITH_AES_256_CCM_8,TLS_DHE_RSA_WITH_AES_256_CCM" />
+				                                <entry key="SSLCertificateFile" value="${http.ssl_certificate_file}" />
+				                                <entry key="SSLCertificateChainFile" value="${http.ssl_certificate_chain_file}" />
+				                                <entry key="SSLCertificateKeyFile" value="${http.ssl_certificate_key_file}" />
+				                                <entry key="clientAuth" value="false" />
+				                                <entry key="maxKeepAliveRequests" value="${http.max_keep_alive_requests}"/>
+				                                <entry key="keepAliveTimout" value="-1"/>
+				                                <entry key="useExecutor" value="true"/>
+				                                <entry key="maxThreads" value="${http.max_threads}"/>
+				                                <entry key="acceptorThreadCount" value="${http.acceptor_thread_count}"/>
+				                                <entry key="processorCache" value="${http.processor_cache}"/>
+				                                <entry key="relaxedQueryChars" value="{}" />
+							</map> 
+						</property> 
+					</bean>
+					https end -->
 			</list>
 		</property>
 
@@ -133,93 +108,33 @@
 
 		<property name="valves">
 			<list>
+			    <!-- This valve replaces the apparent client remote IP address and hostname for the request with the IP address list presented by a proxy or a load balancer via a request headers (e.g. "X-Forwarded-For").
+					If the request is coming to the server through load balancer, this valve lets Tomcat see the client original ip address(that makes the request to tthe load balancer) as client Remote IP
+					If load balancer address is not in the internalProxies and trustedProxies, this operation may fail.
+					
+				-->
+				<bean id="valve.access" class="org.apache.catalina.valves.RemoteIpValve" />
 				<bean id="valve.access" class="org.apache.catalina.valves.AccessLogValve">
 					<property name="directory" value="log" />
-					<property name="prefix" value="${http.host}_access." />
+					<property name="prefix" value="${http.host}_access" />
 					<property name="suffix" value=".log" />
 					<property name="pattern" value="common" />
 					<property name="rotatable" value="true" />
+					<property name="requestAttributesEnabled" value="true" />
+					<property name="fileDateFormat" value="" />
 				</bean>
-				<!-- 
-				<bean id="valve.cluster" class="io.antmedia.enterprise.cluster.HttpLiveStreamValve"> 
-					<property name="cluster" ref="tomcat.cluster" /> </bean>
-					
-				-->
-					
+				<bean class="io.antmedia.valves.DataTransferValve" >
+					<property name="asyncSupported" value="true" />
+				</bean>
+				
+				<!-- cluster start
+				<bean id="valve.cluster" class="io.antmedia.enterprise.cluster.HttpLiveStreamValve">
+					<property name="asyncSupported" value="true" />
+				</bean>
+				cluster end --> 
 			</list>
 		</property>
 
 	</bean>
-	
-	<!-- Tomcat with SSL enabled -->
-	<!-- <bean id="tomcat.server" class="org.red5.server.tomcat.TomcatLoader" 
-										depends-on="context.loader" lazy-init="true"> 
-			<property name="webappFolder" value="${red5.root}/webapps" /> 
-			<property name="connectors"> 
-				<list> 
-					<bean name="httpConnector" class="org.red5.server.tomcat.TomcatConnector"> 
-						<property name="protocol" value="org.apache.coyote.http11.Http11NioProtocol" /> 
-						<property name="address" value="${http.host}:${http.port}" /> 
-						<property name="redirectPort" value="${https.port}" /> 
-				    </bean> 
-				    <bean name="httpsConnector" class="org.red5.server.tomcat.TomcatConnector"> 
-						<property name="secure" value="true" /> 
-						<property name="protocol" value="org.apache.coyote.http11.Http11NioProtocol"/> 
-						<property name="address" value="${http.host}:${https.port}" /> 
-						<property name="redirectPort" value="${http.port}" /> 
-						<property name="connectionProperties"> 
-							<map> 
-								<entry key="port" value="${https.port}" /> 
-								<entry key="redirectPort" value="${http.port}" /> 
-								<entry key="SSLEnabled" value="true" /> 
-								<entry key="sslProtocol" value="TLS" /> 
-								<entry key="keystoreFile" value="${rtmps.keystorefile}" /> 
-								<entry key="keystorePass" value="${rtmps.keystorepass}" /> 
-								<entry key="truststoreFile" value="${rtmps.truststorefile}" /> 
-								<entry key="truststorePass" value="${rtmps.truststorepass}" /> 
-								<entry key="clientAuth" value="false" /> 
-								<entry key="allowUnsafeLegacyRenegotiation" value="true" /> 
-								<entry key="maxKeepAliveRequests" value="${http.max_keep_alive_requests}"/> 
-								<entry key="keepAliveTimout" value="-1"/> 
-								<entry key="useExecutor" value="true"/> 
-								<entry key="maxThreads" value="${http.max_threads}"/> 
-								<entry key="acceptorThreadCount" value="${http.acceptor_thread_count}"/> 
-								<entry key="processorCache" value="${http.processor_cache}"/> 
-							</map> 
-						</property> 
-					</bean> 
-				</list>
-			</property> 
-			<property name="baseHost"> 
-				<bean class="org.apache.catalina.core.StandardHost"> <property name="name" value="${http.host}" /></bean> 
-			</property> 
-		</bean> -->
-		
-	<!-- This entry enabled websocket support on port 8081 at localhost -->
-	<bean id="webSocketTransport" class="org.red5.net.websocket.WebSocketTransport">
-		<property name="addresses">
-			<list>
-				<value>${ws.host}:${ws.port}</value>
-			</list>
-		</property>
-	</bean>
-	
-	<!--  
-	<bean id="webSocketTransportSecure" class="org.red5.net.websocket.WebSocketTransport">
-        <property name="secureConfig">
-            <bean id="webSocketSecureConfig" class="org.red5.net.websocket.SecureWebSocketConfiguration">
-                <property name="keystoreFile" value="${rtmps.keystorefile}"/>
-                <property name="keystorePassword" value="${rtmps.keystorepass}"/>
-                <property name="truststoreFile" value="${rtmps.truststorefile}"/>
-                <property name="truststorePassword" value="${rtmps.truststorepass}"/>
-            </bean>
-        </property>
-        <property name="addresses">
-            <list>
-                <value>${wss.host}:${wss.port}</value>
-            </list>
-        </property>
-    </bean>
-    -->
 
 </beans>

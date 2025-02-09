@@ -10,21 +10,24 @@ fi
 
 ANT_MEDIA_SERVER_DIR=~/softwares/ant-media-server
 
-ANT_MEDIA_SERVER_JAR=./target/ant-media-server-1.3.1.jar
+ANT_MEDIA_SERVER_JAR=./target/ant-media-server-server.jar
+ANT_MEDIA_SERVER_SERVICE_JAR=./target/ant-media-server-service.jar
 
 SRC_CONF_DIR=./src/main/server/conf/
 
 #copy red5 jar from target dir to red5 dir
 cp  $ANT_MEDIA_SERVER_JAR  $ANT_MEDIA_SERVER_DIR/ant-media-server.jar
+cp  $ANT_MEDIA_SERVER_SERVICE_JAR  $ANT_MEDIA_SERVER_DIR/ant-media-server-service.jar
 
 OUT=$?
 
 if [ $OUT -ne 0 ]; then
+    echo "Cannot copy ant-media-server.jar"
     exit $OUT
 fi
 
 
-cp -rf $SRC_CONF_DIR   $ANT_MEDIA_SERVER_DIR/conf/
+#cp -rf $SRC_CONF_DIR   $ANT_MEDIA_SERVER_DIR/conf/
 
 OUT=$?
 

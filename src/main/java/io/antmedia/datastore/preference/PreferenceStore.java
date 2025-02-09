@@ -5,18 +5,20 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.Properties;
 
-import javax.servlet.ServletContext;
+import org.apache.commons.lang3.exception.ExceptionUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import org.springframework.web.context.ServletContextAware;
 
-public class PreferenceStore implements ServletContextAware{
+public class PreferenceStore{
 
-	private String fileName;
 	private Properties prop;
-	private String fullPath;
+	private String path;
 
-	public PreferenceStore(String fileName) {
-		this.fileName = fileName;
+	protected static Logger logger = LoggerFactory.getLogger(PreferenceStore.class);
+
+	public PreferenceStore(String path) {
+		this.path = path;
 	}
 
 	public void put(String key, String value) {
@@ -28,7 +30,7 @@ public class PreferenceStore implements ServletContextAware{
 		Properties properties = getProperties();
 		return properties.getProperty(key);
 	}
-	
+
 	public void remove(String key) {
 		getProperties().remove(key);
 	}
@@ -38,10 +40,9 @@ public class PreferenceStore implements ServletContextAware{
 			prop = new Properties();
 			FileInputStream input = null;
 			try {
-				input = new FileInputStream(fullPath);
+				input = new FileInputStream(path);
 				prop.load(input);
 			} catch (Exception e) {
-				//e.printStackTrace();
 				//this exception may appear if file does not exist so not to log
 			}
 			finally {
@@ -49,7 +50,7 @@ public class PreferenceStore implements ServletContextAware{
 					try {
 						input.close();
 					} catch (IOException e) {
-						e.printStackTrace();
+						logger.error(ExceptionUtils.getStackTrace(e));
 					}
 				}
 			}
@@ -62,32 +63,23 @@ public class PreferenceStore implements ServletContextAware{
 		if (prop != null) {
 			FileOutputStream output = null;
 			try {
-				output = new FileOutputStream(fullPath);
+				output = new FileOutputStream(path);
 				prop.store(output, null);
 				result = true;
 			} catch (Exception e) {
-				e.printStackTrace();
+				logger.error(ExceptionUtils.getStackTrace(e));
 			} finally {
 				if (output != null) {
 					try {
 						output.close();
 					} catch (IOException e) {
-						e.printStackTrace();
+						logger.error(ExceptionUtils.getStackTrace(e));
 					}
 				}
 
 			}
 		}
 		return result;
-	}
-
-	@Override
-	public void setServletContext(ServletContext servletContext) {
-		fullPath = servletContext.getRealPath(fileName);		
-	}
-	
-	public void setFullPath(String fullpath) {
-		this.fullPath = fullpath;
 	}
 
 }

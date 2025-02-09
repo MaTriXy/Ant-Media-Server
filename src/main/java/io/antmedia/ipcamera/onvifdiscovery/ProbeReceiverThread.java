@@ -4,17 +4,18 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.concurrent.CountDownLatch;
 
-import javax.xml.soap.MessageFactory;
-import javax.xml.soap.MimeHeaders;
-import javax.xml.soap.SOAPBody;
-import javax.xml.soap.SOAPException;
-import javax.xml.soap.SOAPMessage;
+import jakarta.xml.soap.MessageFactory;
+import jakarta.xml.soap.MimeHeaders;
+import jakarta.xml.soap.SOAPBody;
+import jakarta.xml.soap.SOAPException;
+import jakarta.xml.soap.SOAPMessage;
 
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
@@ -33,6 +34,7 @@ public class ProbeReceiverThread extends Thread {
 		this.serverFinished = serverFinished;
 	}
 
+	@Override
 	public void run() {
 	    try {
 	       final DatagramPacket packet = new DatagramPacket(new byte[4096], 4096);
@@ -46,7 +48,8 @@ public class ProbeReceiverThread extends Thread {
 	             addresses.add(key);
 	          }
 	       }
-	    } catch (SocketTimeoutException ignored) {
+	    } catch (SocketTimeoutException | SocketException ignored) {
+	    	//ignore this exception
 	    } catch (Exception e) {
 	       e.printStackTrace();
 	    } finally {

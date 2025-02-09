@@ -25,8 +25,8 @@ import java.sql.DriverManager;
 import java.util.ArrayList;
 import java.util.Enumeration;
 
-import javax.servlet.ServletContext;
-import javax.servlet.ServletContextEvent;
+import jakarta.servlet.ServletContext;
+import jakarta.servlet.ServletContextEvent;
 
 import org.red5.io.amf.Output;
 import org.red5.logging.Red5LoggerFactory;
@@ -113,7 +113,12 @@ public class WarLoaderServlet extends ContextLoaderListener {
             super.contextInitialized(sce);
             //get the web context
             applicationContext = (ConfigurableWebApplicationContext) servletContext.getAttribute(WebApplicationContext.ROOT_WEB_APPLICATION_CONTEXT_ATTRIBUTE);
-            logger.debug("Root context path: {}", applicationContext.getServletContext().getContextPath());
+            ServletContext tmpServletContext = applicationContext.getServletContext();
+            
+            if (tmpServletContext != null) 
+            {
+            	logger.debug("Root context path: {}", tmpServletContext.getContextPath());
+            }
 
             ConfigurableBeanFactory factory = applicationContext.getBeanFactory();
 
@@ -192,8 +197,7 @@ public class WarLoaderServlet extends ContextLoaderListener {
                         DriverManager.deregisterDriver(driver);
                     }
                 }
-                // clear the AMF output cache
-                Output.destroyCache();
+             
                 // stop the logger
                 try {
                     ((LoggerContext) LoggerFactory.getILoggerFactory()).stop();

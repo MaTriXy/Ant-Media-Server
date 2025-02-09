@@ -1,10 +1,1 @@
-# Pull Request
-
-This PR fixes #__Enter issue number__
-
-Changes proposed in this pull request:
-- 
-- 
--
-
-
+https://github.com/ant-media/Ant-Media-Server/issues/{__Enter issue number__}

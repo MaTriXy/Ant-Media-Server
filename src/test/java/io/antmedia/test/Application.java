@@ -1,53 +1,76 @@
 package io.antmedia.test;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
 
 import io.antmedia.AntMediaApplicationAdapter;
-import io.antmedia.muxer.IMuxerListener;
+import io.antmedia.datastore.db.types.Broadcast;
+import io.antmedia.muxer.IAntMediaStreamHandler;
 
-public class Application extends AntMediaApplicationAdapter implements IMuxerListener {
+public class Application extends AntMediaApplicationAdapter implements IAntMediaStreamHandler {
 
-	public static String id = null;
-	public static File file = null;
-	public static long duration = 0;
+	public static List<String> id = new ArrayList<>();
+	public static List<File> file = new ArrayList<>();
+	public static List<Long> duration = new ArrayList<>();
+	public static List<Long> startTime = new ArrayList<>();
 
-	public static String notifyHookAction = null;
-	public static String notitfyURL = null;
-	public static String notifyId = null;
-	public static String notifyStreamName = null;
-	public static String notifyCategory = null;
-	public static String notifyVodName = null;
+	public static List<String> notifyHookAction = new ArrayList<>();
+	public static List<String> notitfyURL = new ArrayList<>();
+	public static List<String> notifyId = new ArrayList<>();
+	public static List<String> notifyStreamName = new ArrayList<>();
+	public static List<String> notifyCategory = new ArrayList<>();
+	public static List<String> notifyVodName = new ArrayList<>();
 
+	public static boolean enableSourceHealthUpdate = false;
+	public static List<String> notifyVodId = new ArrayList<>();;
+	
+
+	
+	
 	@Override
-	public void muxingFinished(String id, File file, long duration) {
-		super.muxingFinished(id, file, duration);
-		Application.id = id;
-		Application.file = file;
-		Application.duration = duration;
+	public void muxingFinished(Broadcast broadcast, String streamId, File file, long startTime, long duration, int resolution, String previewPath, String vodId) {
+		super.muxingFinished(broadcast, streamId, file, startTime, duration, resolution, previewPath, vodId);
+		Application.id.add(broadcast.getStreamId());
+		Application.file.add(file);
+		Application.duration.add(duration);
+		Application.startTime.add(startTime);
 	}
+	
 
 	public static void resetFields() {
-		Application.id = null;
-		Application.file = null;
-		Application.duration = 0;
-		notifyHookAction = null;
-		notitfyURL = null;
-		notifyId = null;
-		notifyStreamName = null;
-		notifyCategory = null;
-		notifyVodName = null;
+		Application.id.clear();
+		Application.file.clear();
+		Application.duration.clear();
+		Application.startTime.clear();
+		notifyHookAction.clear();
+		notitfyURL.clear();
+		notifyId.clear();
+		notifyStreamName.clear();
+		notifyCategory.clear();
+		notifyVodName.clear();
 
 	}
 
-	public StringBuffer notifyHook(String url, String id, String action, String streamName, String category,
-			String vodName) {
-		notifyHookAction = action;
-		notitfyURL = url;
-		notifyId = id;
-		notifyStreamName = streamName;
-		notifyCategory = category;
-		notifyVodName = vodName;
+	@Override
+	public void notifyHook(String url, String id, String mainTrackId, String action, String streamName, String category,
+                           String vodName, String vodId, String metadata, String subscriberId) {
+		logger.info("notify hook action: {}", action);
+		notifyHookAction.add(action);
+		notitfyURL.add(url);
+		notifyId.add(id);
+		notifyStreamName.add(streamName);
+		notifyCategory.add(category);
+		notifyVodName.add(vodName);
+		notifyVodId.add(vodId);
 
-		return null;
 	}
+
+	@Override
+	public void setQualityParameters(String id, String quality, double speed, int pendingPacketSize, long updateTime) {
+		if (enableSourceHealthUpdate) {
+			super.setQualityParameters(id, quality, speed, pendingPacketSize, updateTime);
+		}
+	}
+	
 }

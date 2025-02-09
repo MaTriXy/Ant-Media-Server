@@ -1,39 +1,59 @@
 package io.antmedia.datastore.db;
 
 import java.io.File;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Queue;
+import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.regex.Pattern;
+
+import javax.annotation.Nonnull;
 
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.lang3.RandomStringUtils;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.gson.Gson;
-
+import io.antmedia.AntMediaApplicationAdapter;
 import io.antmedia.datastore.db.types.Broadcast;
+import io.antmedia.datastore.db.types.BroadcastUpdate;
+import io.antmedia.datastore.db.types.ConnectionEvent;
 import io.antmedia.datastore.db.types.Endpoint;
-import io.antmedia.datastore.db.types.SocialEndpointCredentials;
-import io.antmedia.datastore.db.types.Vod;
+import io.antmedia.datastore.db.types.P2PConnection;
+import io.antmedia.datastore.db.types.StreamInfo;
+import io.antmedia.datastore.db.types.Subscriber;
+import io.antmedia.datastore.db.types.SubscriberMetadata;
+import io.antmedia.datastore.db.types.TensorFlowObject;
+import io.antmedia.datastore.db.types.Token;
+import io.antmedia.datastore.db.types.VoD;
+import io.antmedia.datastore.db.types.WebRTCViewerInfo;
+import io.antmedia.muxer.IAntMediaStreamHandler;
+import io.antmedia.muxer.MuxAdaptor;
 
-public class InMemoryDataStore implements IDataStore {
-
+public class InMemoryDataStore extends DataStore {
 
 	protected static Logger logger = LoggerFactory.getLogger(InMemoryDataStore.class);
-
-	private Gson gson;
-
-	public LinkedHashMap<String, Broadcast> broadcastMap = new LinkedHashMap<String, Broadcast>();
-
-	public LinkedHashMap<String, Vod> vodMap = new LinkedHashMap<String, Vod>();
-	
-	public LinkedHashMap<String, SocialEndpointCredentials> socialEndpointCredentialsMap = new LinkedHashMap<String, SocialEndpointCredentials>();
+	private Map<String, Broadcast> broadcastMap = new LinkedHashMap<>();
+	private Map<String, VoD> vodMap = new LinkedHashMap<>();
+	private Map<String, List<TensorFlowObject>> detectionMap = new LinkedHashMap<>();
+	private Map<String, Token> tokenMap = new LinkedHashMap<>();
+	private Map<String, Subscriber> subscriberMap = new LinkedHashMap<>();
+	private Map<String, Queue<ConnectionEvent>> connectionEvents = new LinkedHashMap<>();
+	private Map<String, SubscriberMetadata> subscriberMetadataMap = new LinkedHashMap<>();
+	private Map<String, WebRTCViewerInfo> webRTCViewerMap = new LinkedHashMap<>();
 
 
 	public InMemoryDataStore(String dbName) {
+		available = true;
 	}
 
 	@Override
@@ -43,7 +63,7 @@ public class InMemoryDataStore implements IDataStore {
 		if (broadcast != null) {
 
 			try {
-				if (broadcast.getStreamId() == null) {
+				if (broadcast.getStreamId() == null || broadcast.getStreamId().isEmpty()) {
 					streamId = RandomStringUtils.randomNumeric(24);
 					broadcast.setStreamId(streamId);
 				}
@@ -53,9 +73,12 @@ public class InMemoryDataStore implements IDataStore {
 					rtmpURL += streamId;
 				}
 				broadcast.setRtmpURL(rtmpURL);
+				if(broadcast.getStatus()==null) {
+					broadcast.setStatus(IAntMediaStreamHandler.BROADCAST_STATUS_CREATED);
+				}
 				broadcastMap.put(streamId, broadcast);
 			} catch (Exception e) {
-				e.printStackTrace();
+				logger.error(e.getMessage());
 				streamId = null;
 			}
 
@@ -70,16 +93,8 @@ public class InMemoryDataStore implements IDataStore {
 	}
 
 	@Override
-	public boolean updateName(String id, String name, String description) {
-		Broadcast broadcast = broadcastMap.get(id);
-		boolean result = false;
-		if (broadcast != null) {
-			broadcast.setName(name);
-			broadcast.setDescription(description);
-			broadcastMap.put(id, broadcast);
-			result = true;
-		}
-		return result;
+	public VoD getVoD(String id) {
+		return vodMap.get(id);
 	}
 
 	@Override
@@ -88,30 +103,14 @@ public class InMemoryDataStore implements IDataStore {
 		boolean result = false;
 		if (broadcast != null) {
 			broadcast.setStatus(status);
-			broadcastMap.put(id, broadcast);
-			result = true;
-		}
-		return result;
-	}
-
-	@Override
-	public boolean updateDuration(String id, long duration) {
-		Broadcast broadcast = broadcastMap.get(id);
-		boolean result = false;
-		if (broadcast != null) {
-			broadcast.setDuration(duration);
-			broadcastMap.put(id, broadcast);
-			result = true;
-		}
-		return result;
-	}
-
-	@Override
-	public boolean updatePublish(String id, boolean publish) {
-		Broadcast broadcast = broadcastMap.get(id);
-		boolean result = false;
-		if (broadcast != null) {
-			broadcast.setPublish(publish);
+			if(status.equals(IAntMediaStreamHandler.BROADCAST_STATUS_BROADCASTING)) {
+				broadcast.setStartTime(System.currentTimeMillis());
+			}
+			else if(status.equals(IAntMediaStreamHandler.BROADCAST_STATUS_FINISHED)) {
+				broadcast.setRtmpViewerCount(0);
+				broadcast.setWebRTCViewerCount(0);
+				broadcast.setHlsViewerCount(0);
+			}
 			broadcastMap.put(id, broadcast);
 			result = true;
 		}
@@ -136,15 +135,22 @@ public class InMemoryDataStore implements IDataStore {
 	}
 
 	@Override
-	public boolean removeEndpoint(String id, Endpoint endpoint) {
+	public boolean removeEndpoint(String id, Endpoint endpoint, boolean checkRTMPUrl) {
 		boolean result = false;
 		Broadcast broadcast = broadcastMap.get(id);
 		if (broadcast != null && endpoint != null) {
 			List<Endpoint> endPointList = broadcast.getEndPointList();
 			if (endPointList != null) {
 				for (Iterator<Endpoint> iterator = endPointList.iterator(); iterator.hasNext();) {
-					Endpoint endpointItem = (Endpoint) iterator.next();
-					if (endpointItem.rtmpUrl.equals(endpoint.rtmpUrl)) {
+					Endpoint endpointItem = iterator.next();
+					if(checkRTMPUrl) {
+						if (endpointItem.getRtmpUrl().equals(endpoint.getRtmpUrl())) {
+							iterator.remove();
+							result = true;
+							break;
+						}
+					}
+					else if (endpointItem.getEndpointServiceId().equals(endpoint.getEndpointServiceId())) {
 						iterator.remove();
 						result = true;
 						break;
@@ -162,214 +168,178 @@ public class InMemoryDataStore implements IDataStore {
 	}
 
 	@Override
+	public long getActiveBroadcastCount() {
+		Collection<Broadcast> values = broadcastMap.values();
+		long activeBroadcastCount = 0;
+		for (Broadcast broadcast : values) {
+			String status = broadcast.getStatus();
+			if (status != null && status.equals(IAntMediaStreamHandler.BROADCAST_STATUS_BROADCASTING)) {
+				activeBroadcastCount++;
+			}
+		}
+		return activeBroadcastCount;
+	}
+
+
+	public long getLocalLiveBroadcastCount(String hostAddress) {
+		return getActiveBroadcastCount();
+	}
+
+	public List<Broadcast> getLocalLiveBroadcasts(String hostAddress) 
+	{
+		List<Broadcast> broadcastList = new ArrayList<>();
+		Collection<Broadcast> values = broadcastMap.values();
+		for (Broadcast broadcast : values) {
+			String status = broadcast.getStatus();
+			if (IAntMediaStreamHandler.BROADCAST_STATUS_BROADCASTING.equals(status)) {
+				broadcastList.add(broadcast);
+			}
+		}
+		return broadcastList;
+	}
+
+
+	@Override
 	public boolean delete(String id) {
 		Broadcast broadcast = broadcastMap.get(id);
 		boolean result = false;
 		if (broadcast != null) {
-			broadcastMap.remove(id);
-			result = true;
+			result = broadcastMap.remove(id) != null ? true : false;
 		}
 		return result;
 	}
 
 	@Override
-	public List<Broadcast> getBroadcastList(int offset, int size) {
+	public List<Broadcast> getBroadcastList(int offset, int size, String type, String sortBy, String orderBy, String search) {
+
 		Collection<Broadcast> values = broadcastMap.values();
-		int t = 0;
-		int itemCount = 0;
-		if (size > 50) {
-			size = 50;
-		}
-		if (offset < 0) {
-			offset = 0;
-		}
-		List<Broadcast> list = new ArrayList<Broadcast>();
-		for (Broadcast broadcast : values) {
 
-			if (t < offset) {
-				t++;
-				continue;
+		ArrayList<Broadcast> list = new ArrayList<>();
+
+		if(type != null && !type.isEmpty()) {
+			for (Broadcast broadcast : values) 
+			{
+				if(type.equals(broadcast.getType())) 
+				{
+					list.add(broadcast);
+				}
 			}
-			list.add(broadcast);
-			itemCount++;
-
-			if (itemCount >= size) {
-				break;
-			}
-
 		}
-		return list;
+		else {
+			for (Broadcast broadcast : values) 
+			{
+				list.add(broadcast);
+			}
+		}
+		if(search != null && !search.isEmpty()){
+			logger.info("server side search called for String = {}", search);
+			list = searchOnServer(list, search);
+		}
+		return sortAndCropBroadcastList(list, offset, size, sortBy, orderBy);
 	}
 
 
-
-	@Override
-	public boolean editCameraInfo(Broadcast camera) {
-		boolean result = false;
-		try {
-			logger.warn("inside of editCameraInfo");
-
-			Broadcast oldCam = get(camera.getStreamId());
-
-			oldCam.setName(camera.getName());
-			oldCam.setUsername(camera.getUsername());
-			oldCam.setPassword(camera.getPassword());
-			oldCam.setIpAddr(camera.getIpAddr());
-
-			broadcastMap.replace(oldCam.getStreamId(), oldCam);
-
-
-			result = true;
-		} catch (Exception e) {
-			result = false;
-		}
-
-		return result;
-	}
-
-	@Override
-	public boolean deleteStream(String id) {
-		boolean result = false;
-		try {
-
-			if (broadcastMap.containsKey(id)) {
-				logger.warn("inside of deleteStream");
-				broadcastMap.remove(id);
-				result = true;
-			}
-
-		} catch (Exception e) {
-			result = false;
-		}
-		return result;
-	}
 
 
 	@Override
 	public List<Broadcast> getExternalStreamsList() {
-		Object[] objectArray = broadcastMap.values().toArray();
+		Collection<Broadcast> values = broadcastMap.values();
 
-		Broadcast[] broadcastArray = new Broadcast[objectArray.length];
+		long now = System.currentTimeMillis();
+		List<Broadcast> streamsList = new ArrayList<>();
+		for (Broadcast broadcast : values) {
+			String type = broadcast.getType();
+			String status = broadcast.getStatus();
 
-		List<Broadcast> streamsList = new ArrayList<Broadcast>();
-
-		for (int i = 0; i < objectArray.length; i++) {
-
-			broadcastArray[i] = gson.fromJson((String) objectArray[i], Broadcast.class);
-
-		}
-
-		for (int i = 0; i < broadcastArray.length; i++) {
-
-			if (broadcastArray[i].getType().equals("ipCamera") || broadcastArray[i].getType().equals("streamSource")) {
-
-				streamsList.add(gson.fromJson((String) objectArray[i], Broadcast.class));
+			if ((type.equals(AntMediaApplicationAdapter.IP_CAMERA) || type.equals(AntMediaApplicationAdapter.STREAM_SOURCE)) && (!status.equals(IAntMediaStreamHandler.BROADCAST_STATUS_BROADCASTING) && !status.equals(IAntMediaStreamHandler.BROADCAST_STATUS_PREPARING)) ) {
+				streamsList.add(broadcast);
+				broadcast.setStatus(IAntMediaStreamHandler.BROADCAST_STATUS_PREPARING);
+				broadcast.setUpdateTime(now);
+				broadcastMap.replace(broadcast.getStreamId(), broadcast);
 			}
 		}
-
 		return streamsList;
 	}
 
 	@Override
-	public void close() {
-		// TODO Auto-generated method stub
-
+	public void close(boolean deleteDB) {
+		//no need to implement 
+		available = false;
 	}
 
 	@Override
-	public List<Broadcast> filterBroadcastList(int offset, int size, String type) {
-		int t = 0;
-		int itemCount = 0;
-		if (size > 50) {
-			size = 50;
-		}
-		if (offset < 0) {
-			offset = 0;
-		}
-
-		Collection<Broadcast> values =broadcastMap.values();
-
-		List<Broadcast> list = new ArrayList();
-
-		for (Broadcast broadcast : values) 
-		{
-			if(broadcast.getType().equals("ipCamera")) 
-			{
-				if (t < offset) {
-					t++;
-					continue;
-				}
-				list.add(broadcast);
-
-				itemCount++;
-
-				if (itemCount >= size) {
-					break;
-				}
-			}
-		}
-
-		return list;
-	}
-
-	@Override
-	public boolean addVod(String id, Vod vod) {
-		String vodId = null;
+	public String addVod(VoD vod) {
+		String id = null;
 		boolean result = false;
 
 		if (vod != null) {
 			try {
-				vodId = RandomStringUtils.randomNumeric(24);
-				vod.setVodId(vodId);
-
-				vodMap.put(vodId,vod);
+				if (vod.getVodId() == null) {
+					vod.setVodId(RandomStringUtils.randomNumeric(24));
+				}
+				vodMap.put(vod.getVodId(),vod);
 				result = true;
 
 			} catch (Exception e) {
-				e.printStackTrace();
-				
+				logger.error(e.getMessage());
 			}
 		}
-		return result;
+
+		if(result) {
+			id = vod.getVodId();
+		}
+		return id;
 	}
 
 	@Override
-	public List<Vod> getVodList(int offset, int size) {
-		Collection<Vod> values = vodMap.values();
-		int t = 0;
-		int itemCount = 0;
-		if (size > 50) {
-			size = 50;
-		}
-		if (offset < 0) {
-			offset = 0;
-		}
-		List<Vod> list = new ArrayList();
-		for (Vod vodString : values) {
-			if (t < offset) {
-				t++;
-				continue;
+	public boolean updateVoDProcessStatus(String id, String status) {
+		VoD vod = vodMap.get(id);
+		if (vod != null) {
+			vod.setProcessStatus(status);
+			if (VoD.PROCESS_STATUS_PROCESSING.equals(status)) {
+				vod.setProcessStartTime(System.currentTimeMillis());
 			}
-			list.add(vodString);
-			itemCount++;
-
-			if (itemCount >= size) {
-				break;
+			else if (VoD.PROCESS_STATUS_FAILED.equals(status) || VoD.PROCESS_STATUS_FINISHED.equals(status)) {
+				vod.setProcessEndTime(System.currentTimeMillis());
 			}
-
+			vodMap.put(id, vod);
+			return true;
 		}
-		return list;
+
+		return false;
 	}
 
+	@Override
+	public List<VoD> getVodList(int offset, int size, String sortBy, String orderBy, String filterStreamId, String search)
+	{
+		ArrayList<VoD> vods = null;
 
+		if (filterStreamId != null && !filterStreamId.isEmpty()) 
+		{
+			vods = new ArrayList<>();
+
+			for (VoD vod : vodMap.values()) 
+			{
+				if(vod.getStreamId().equals(filterStreamId)) {
+					vods.add(vod);
+				}
+			}
+
+		}
+		else {
+			vods = new ArrayList<>(vodMap.values());
+		}
+		if(search != null && !search.isEmpty()){
+			logger.info("server side search called for VoD searchString = {}", search);
+			vods = searchOnServerVod(vods, search);
+		}
+		return sortAndCropVodList(vods, offset, size, sortBy, orderBy);
+	}
 
 	@Override
 	public boolean deleteVod(String id) {
-		boolean result = vodMap.remove(id) != null;
-
-		return result;
+		return vodMap.remove(id) != null;
 	}
-
 
 
 	public boolean removeAllEndpoints(String id) {
@@ -386,167 +356,816 @@ public class InMemoryDataStore implements IDataStore {
 
 	@Override
 	public long getTotalVodNumber() {
-
 		return vodMap.size();
-
 	}
 
 	@Override
-	public boolean fetchUserVodList(File userfile) {
+	public int fetchUserVodList(File userfile) {
 
-		Object[] objectArray = vodMap.values().toArray();
-
-		Vod[] vodtArray = new Vod[objectArray.length];
-		for (int i = 0; i < objectArray.length; i++) {
-			vodtArray[i] = gson.fromJson((String) objectArray[i], Vod.class);
+		if (userfile == null) {
+			return 0;
 		}
 
-		for (int i = 0; i < vodtArray.length; i++) {
-			if (vodtArray[i].getType().equals("userVod")) {
-				vodMap.remove(vodtArray[i].getVodId());
+
+		/*
+		 * Delete all user vod in db
+		 */
+		int numberOfSavedFiles = 0;
+		Collection<VoD> vodCollection = vodMap.values();
+
+		for (Iterator<VoD> iterator = vodCollection.iterator(); iterator.hasNext();) {
+			VoD vod = iterator.next();
+			if (vod.getType().equals(VoD.USER_VOD)) {
+				iterator.remove();
 			}
 		}
 
 		File[] listOfFiles = userfile.listFiles();
 
-		for (File file : listOfFiles) {
+		if (listOfFiles != null) {
 
-			String fileExtension = FilenameUtils.getExtension(file.getName());
+			for (File file : listOfFiles) 
+			{
+				String fileExtension = FilenameUtils.getExtension(file.getName());
 
-			if (file.isFile() && fileExtension.equals("mp4")) {
-				long fileSize = file.length();
-				long unixTime = System.currentTimeMillis();
+				if (file.isFile() && 
+						("mp4".equals(fileExtension) || "flv".equals(fileExtension) || "mkv".equals(fileExtension))) 
+				{
+					long fileSize = file.length();
+					long unixTime = System.currentTimeMillis();
 
-				Vod newVod = new Vod("vodFile", "vodFile", file.getPath(), file.getName(), unixTime, 0, fileSize,
-						"userVod");
+					String filePath = file.getPath();
 
-				addUserVod("vodFile", newVod);
+					String[] subDirs = filePath.split(Pattern.quote(File.separator));
+
+					String relativePath= "streams/" + subDirs[subDirs.length-2] +'/' +subDirs[subDirs.length-1];
+
+					String vodId = RandomStringUtils.randomNumeric(24);
+					VoD newVod = new VoD("vodFile", "vodFile", relativePath, file.getName(), unixTime, 0, 0, fileSize,
+							VoD.USER_VOD, vodId, null);
+
+					addVod(newVod);
+					numberOfSavedFiles++;
+				}
 			}
 		}
 
-
-		return true;
-
-
-
+		return numberOfSavedFiles;
 	}
-
-	@Override
-	public boolean addUserVod(String id, Vod vod) {
-		String vodId = null;
-		boolean result = false;
-
-		if (vod != null) {
-			try {
-				vodId = RandomStringUtils.randomNumeric(24);
-				vod.setVodId(vodId);
-				vodMap.put(vodId, vod);
-				result = true;
-
-			} catch (Exception e) {
-				e.printStackTrace();
-				
-			}
-		}
-		return result;
-	}
-
 
 
 	@Override
-	public boolean updateSourceQuality(String id, String quality) {
-		boolean result = false;
-		if (id != null) {
-			Broadcast broadcast = broadcastMap.get(id);
-			if (broadcast != null) {
-				broadcast.setQuality(quality);
-				broadcastMap.replace(id, broadcast);
-				result = true;
+	public long getTotalBroadcastNumber() {
+		return broadcastMap.size();
+	}
+
+	public void saveDetection(String id, long timeElapsed, List<TensorFlowObject> detectedObjects) {
+		if (detectedObjects != null) {
+			for (TensorFlowObject tensorFlowObject : detectedObjects) {
+				tensorFlowObject.setDetectionTime(timeElapsed);
 			}
+			detectionMap.put(id, detectedObjects);
 		}
-		return result;
 	}
 
 	@Override
-
-	public boolean updateSourceSpeed(String id, double speed) {
-		boolean result = false;
-		if (id != null) {
-			Broadcast broadcast = broadcastMap.get(id);
-			if (broadcast != null) {
-				broadcast.setSpeed(speed);
-				broadcastMap.replace(id, broadcast);
-				result = true;
-			}
+	public long getPartialBroadcastNumber(String search){
+		ArrayList<Broadcast> broadcasts = new ArrayList<>(broadcastMap.values());
+		if(search != null && !search.isEmpty()) {
+			broadcasts = searchOnServer(broadcasts, search);
 		}
-		return result;
-	}
-	public SocialEndpointCredentials addSocialEndpointCredentials(SocialEndpointCredentials credentials) {
-		SocialEndpointCredentials addedCredential = null;
-		if (credentials != null && credentials.getAccountName() != null && credentials.getAccessToken() != null
-				 && credentials.getServiceName() != null) 
-		{
-			if (credentials.getId() == null) {
-				//create new id if id is not set
-				String id = RandomStringUtils.randomAlphanumeric(6);
-				credentials.setId(id);
-				socialEndpointCredentialsMap.put(id, credentials);
-				addedCredential = credentials;
-			}
-			else {
-				
-				 if(socialEndpointCredentialsMap.get(credentials.getId()) != null) 
-				 {
-					 //replace the field if id exists
-					socialEndpointCredentialsMap.put(credentials.getId(), credentials);
-					addedCredential = credentials;
-				 }
-				 //if id is not matched with any value, do not record
-			}
-		}
-		return addedCredential;
+		return broadcasts.size();
 	}
 
 	@Override
-	public List<SocialEndpointCredentials> getSocialEndpoints(int offset, int size) 
-	{
-		Collection<SocialEndpointCredentials> values = socialEndpointCredentialsMap.values();
-		int t = 0;
-		int itemCount = 0;
-		if (size > 50) {
-			size = 50;
+	public long getPartialVodNumber(String search){
+		ArrayList<VoD> vods = new ArrayList<>(vodMap.values());
+		if(search != null && !search.isEmpty()) {
+			vods = searchOnServerVod(vods, search);
 		}
-		if (offset < 0) {
-			offset = 0;
-		}
-		List<SocialEndpointCredentials> list = new ArrayList();
-		for (SocialEndpointCredentials credential : values) {
-			if (t < offset) {
-				t++;
-				continue;
-			}
-			list.add(credential);
-			itemCount++;
+		return vods.size();
+	}
 
-			if (itemCount >= size) {
-				break;
+	@Override
+	public List<TensorFlowObject> getDetectionList(String idFilter, int offsetSize, int batchSize) {
+		int offsetCount=0; 
+		int batchCount=0;
+		List<TensorFlowObject> list = new ArrayList<>();
+		Set<String> keySet = detectionMap.keySet();
+		if (batchSize > MAX_ITEM_IN_ONE_LIST) {
+			batchSize = MAX_ITEM_IN_ONE_LIST;
+		}
+		for(String keyValue: keySet) {
+			if (keyValue.startsWith(idFilter)) 
+			{
+				if (offsetCount < offsetSize) {
+					offsetCount++;
+					continue;
+				}
+				if (batchCount >= batchSize) {
+					break;
+				}
+				List<TensorFlowObject> detectedList = detectionMap.get(keyValue);
+				list.addAll(detectedList);
+				batchCount=list.size();
 			}
 		}
 		return list;
 	}
 
 	@Override
-	public boolean removeSocialEndpointCredentials(String id) {
-		return socialEndpointCredentialsMap.remove(id) != null;
+
+	public long getObjectDetectedTotal(String id) {
+
+		List<TensorFlowObject> list = new ArrayList<>();
+		Set<String> keySet = detectionMap.keySet();
+
+		for(String keyValue: keySet) {
+			if (keyValue.startsWith(id)) 
+			{
+				List<TensorFlowObject> detectedList = detectionMap.get(keyValue);
+				list.addAll(detectedList);
+			}
+		}
+		return list.size();
 	}
 
 	@Override
-	public SocialEndpointCredentials getSocialEndpointCredentials(String id) {
-		SocialEndpointCredentials credential = null;
+	public List<TensorFlowObject> getDetection(String id) {
 		if (id != null) {
-			credential = socialEndpointCredentialsMap.get(id);
+			List<TensorFlowObject> detectedObjects = detectionMap.get(id);
+			return detectedObjects;
 		}
-		return credential;
+		return null;
 	}
 
+	@Override
+	public boolean updateBroadcastFields(String streamId, BroadcastUpdate broadcast) {		
+		boolean result = false;
+		try {
+			Broadcast oldBroadcast = get(streamId);
+
+			if (oldBroadcast != null) {
+				updateStreamInfo(oldBroadcast, broadcast);
+				broadcastMap.replace(oldBroadcast.getStreamId(), oldBroadcast);
+
+				result = true;
+			}
+		} catch (Exception e) {
+			logger.error("error in editStreamSourceInfo: {}",  ExceptionUtils.getStackTrace(e));
+			result = false;
+		}
+
+		return result;
+	}
+
+	@Override
+	public synchronized boolean updateHLSViewerCountLocal(String streamId, int diffCount) {
+		boolean result = false;
+		if (streamId != null) {
+			Broadcast broadcast = broadcastMap.get(streamId);
+			if (broadcast != null) {
+				int hlsViewerCount = broadcast.getHlsViewerCount();
+				hlsViewerCount += diffCount;
+
+				broadcast.setHlsViewerCount(hlsViewerCount);
+				broadcastMap.replace(streamId, broadcast);
+				result = true;
+			}
+		}
+		return result;
+	}
+
+	@Override
+	public synchronized boolean updateDASHViewerCountLocal(String streamId, int diffCount) {
+		boolean result = false;
+		if (streamId != null) {
+			Broadcast broadcast = broadcastMap.get(streamId);
+			if (broadcast != null) {
+				int dashViewerCount = broadcast.getDashViewerCount();
+				dashViewerCount += diffCount;
+
+				broadcast.setDashViewerCount(dashViewerCount);
+				broadcastMap.replace(streamId, broadcast);
+				result = true;
+			}
+		}
+		return result;
+	}
+
+	@Override
+	public synchronized boolean updateWebRTCViewerCountLocal(String streamId, boolean increment) {
+		boolean result = false;
+		if (streamId != null) {
+			Broadcast broadcast = broadcastMap.get(streamId);
+			if (broadcast != null) {
+				int webRTCViewerCount = broadcast.getWebRTCViewerCount();
+				if (increment) {
+					webRTCViewerCount++;
+				}
+				else  {
+					webRTCViewerCount--;
+				}
+				if(webRTCViewerCount >= 0) {
+					broadcast.setWebRTCViewerCount(webRTCViewerCount);
+					broadcastMap.replace(streamId, broadcast);
+					result = true;
+				}
+			}
+		}
+		return result;
+	}
+
+	@Override
+	public synchronized boolean updateRtmpViewerCountLocal(String streamId, boolean increment) {
+		boolean result = false;
+		if (streamId != null) {
+			Broadcast broadcast = broadcastMap.get(streamId);
+			if (broadcast != null) {
+				int rtmpViewerCount = broadcast.getRtmpViewerCount();
+				if (increment) {
+					rtmpViewerCount++;
+				}
+				else  {
+					rtmpViewerCount--;
+				}
+				if(rtmpViewerCount >= 0) {
+					broadcast.setRtmpViewerCount(rtmpViewerCount);
+					broadcastMap.replace(streamId, broadcast);
+					result = true;
+				}
+			}
+		}
+		return result;
+	}
+
+	@Override
+	public boolean saveToken(Token token) {
+		boolean result = false;
+		if(token.getStreamId() != null && token.getTokenId() != null) {
+
+			try {
+
+				tokenMap.put(token.getTokenId(), token);
+				result = true;
+			} catch (Exception e) {
+				logger.error(ExceptionUtils.getStackTrace(e));
+			}
+		}
+
+		return result;
+	}
+
+	@Override
+	public Token validateToken(Token token) {
+		Token fetchedToken = null;
+		if (token.getTokenId() != null) {
+			fetchedToken = tokenMap.get(token.getTokenId());
+			if (fetchedToken != null 
+					&& fetchedToken.getType().equals(token.getType()) 
+					&& Instant.now().getEpochSecond() < fetchedToken.getExpireDate()) {
+
+				if(token.getRoomId() == null || token.getRoomId().isEmpty()) {
+					if(fetchedToken.getStreamId().equals(token.getStreamId())) {
+						tokenMap.remove(token.getTokenId());
+					}
+					else {
+						fetchedToken = null;
+					}
+				}
+				return fetchedToken;
+			}else {
+				fetchedToken = null;
+			}
+		}
+		return fetchedToken;
+	}
+
+	@Override
+	public boolean revokeTokens(String streamId) {
+		boolean result = false;
+		Collection<Token> tokenCollection = tokenMap.values();
+
+		for (Iterator<Token> iterator = tokenCollection.iterator(); iterator.hasNext();) {
+			Token token = iterator.next();
+			if (token.getStreamId().equals(streamId)) {
+				iterator.remove();
+				tokenMap.remove(token.getTokenId());
+			}
+			result = true;
+
+		}
+		return result;
+	}
+
+	@Override
+	public List<Token> listAllTokens(String streamId, int offset, int size) {
+
+		List<Token> list = new ArrayList<>();
+		List<Token> returnList = new ArrayList<>();
+
+		Collection<Token> values = tokenMap.values();
+		int t = 0;
+		int itemCount = 0;
+		if (size > MAX_ITEM_IN_ONE_LIST) {
+			size = MAX_ITEM_IN_ONE_LIST;
+		}
+		if (offset < 0) {
+			offset = 0;
+		}
+
+
+		for(Token token: values) {
+			if (token.getStreamId().equals(streamId)) {
+				list.add(token);
+			}
+		}
+
+
+		Iterator<Token> iterator = list.iterator();
+
+		while(itemCount < size && iterator.hasNext()) {
+			if (t < offset) {
+				t++;
+				iterator.next();
+			}
+			else {
+
+				returnList.add(iterator.next());
+				itemCount++;
+			}
+		}
+
+		return returnList;
+	}
+
+	@Override
+	public List<Subscriber> listAllSubscribers(String streamId, int offset, int size) {
+		List<Subscriber> list = new ArrayList<>();
+		List<Subscriber> returnList = new ArrayList<>();
+
+		Collection<Subscriber> values = subscriberMap.values();
+		int t = 0;
+		int itemCount = 0;
+		if (size > MAX_ITEM_IN_ONE_LIST) {
+			size = MAX_ITEM_IN_ONE_LIST;
+		}
+		if (offset < 0) {
+			offset = 0;
+		}
+
+
+		for(Subscriber subscriber: values) {
+			if (subscriber.getStreamId().equals(streamId)) {
+				list.add(subscriber);
+			}
+		}
+
+
+		Iterator<Subscriber> iterator = list.iterator();
+
+		while(itemCount < size && iterator.hasNext()) {
+			if (t < offset) {
+				t++;
+				iterator.next();
+			}
+			else {
+
+				returnList.add(iterator.next());
+				itemCount++;
+			}
+		}
+
+		return returnList;
+	}
+
+	@Override
+	public boolean addSubscriber(String streamId, Subscriber subscriber) {
+		boolean result = false;
+
+		if (subscriber != null && subscriber.getStreamId() != null && subscriber.getSubscriberId() != null) {
+			try {
+				subscriberMap.put(subscriber.getSubscriberKey(), subscriber);
+				result = true;
+			} catch (Exception e) {
+				logger.error(ExceptionUtils.getStackTrace(e));
+			}
+		}
+		return result;
+	}
+	
+	@Override
+	public List<ConnectionEvent> getConnectionEvents(String streamId, String subscriberId, int offset, int size) {
+		
+		String key = Subscriber.getDBKey(streamId, subscriberId);
+		
+		
+		List<ConnectionEvent> list = new ArrayList<>();		
+		if (key != null) {
+			Collection<ConnectionEvent> values = connectionEvents.get(key);
+			if (values != null) {
+				list = getConnectionEventListFromCollection(values, null);
+			}
+		}
+		else {
+			Collection<Queue<ConnectionEvent>> values = connectionEvents.values();
+			for (Queue<ConnectionEvent> queue : values) {
+				list.addAll(getConnectionEventListFromCollection(queue, streamId));
+			}
+		}
+		return MapBasedDataStore.getReturningConnectionEventsList(offset, size, list);
+	}
+	
+	@Override
+	public boolean addConnectionEvent(ConnectionEvent connectionEvent) {
+		boolean result = false;
+		if (connectionEvent != null && StringUtils.isNoneBlank(connectionEvent.getStreamId(), connectionEvent.getSubscriberId())) {
+			try {
+				String key = Subscriber.getDBKey(connectionEvent.getStreamId(), connectionEvent.getSubscriberId());
+				if (!connectionEvents.containsKey(key)) {
+					connectionEvents.put(key, new ConcurrentLinkedQueue<ConnectionEvent>());
+				}
+				connectionEvents.get(key).add(connectionEvent);
+				result = true;
+			} catch (Exception e) {
+				logger.error(ExceptionUtils.getStackTrace(e));
+			}
+		}
+
+		return result;
+	}
+
+	@Override
+	public boolean deleteSubscriber(String streamId, String subscriberId) {
+
+		boolean result = false;
+		if(streamId != null && subscriberId != null) {
+			try {
+				Subscriber sub = subscriberMap.remove(Subscriber.getDBKey(streamId, subscriberId));
+				result = sub != null;
+				connectionEvents.keySet().removeIf(key -> key.equals(Subscriber.getDBKey(streamId, subscriberId)));
+
+			} catch (Exception e) {
+				logger.error(ExceptionUtils.getStackTrace(e));
+			}
+		}
+
+		return result;
+	}
+
+	@Override
+	public boolean blockSubscriber(String streamId, String subscriberId, String blockedType, int seconds) {
+		boolean result = false;
+		if (streamId != null && subscriberId != null) {
+			try {
+				Subscriber subscriber = subscriberMap.get(Subscriber.getDBKey(streamId, subscriberId));
+				if(subscriber == null){
+					subscriber = new Subscriber();
+					subscriber.setStreamId(streamId);
+					subscriber.setSubscriberId(subscriberId);
+				}
+				subscriber.setBlockedType(blockedType);
+				subscriber.setBlockedUntilUnitTimeStampMs(System.currentTimeMillis() + (seconds * 1000));
+
+				subscriberMap.put(subscriber.getSubscriberKey(), subscriber);
+
+				result = true;
+			} catch (Exception e) {
+				logger.error(ExceptionUtils.getStackTrace(e));
+			}
+		}
+
+		return result;
+
+
+	}
+
+	@Override
+	public boolean revokeSubscribers(String streamId) {
+		boolean result = false;
+		Collection<Subscriber> subscriberCollection = subscriberMap.values();
+
+		for (Iterator<Subscriber> iterator = subscriberCollection.iterator(); iterator.hasNext();) {
+			Subscriber subscriber =  iterator.next();
+			String subscriberStreamId = subscriber.getStreamId();
+			if (subscriberStreamId != null && subscriberStreamId.equals(streamId)) {
+				iterator.remove();
+				subscriberMap.remove(subscriber.getSubscriberKey());
+			}
+			connectionEvents.keySet().removeIf(key -> key.startsWith(streamId+ "-"));
+
+			result = true;
+
+		}
+		return result;
+	}
+
+	@Override
+	public Subscriber getSubscriber(String streamId, String subscriberId) {
+		return subscriberMap.get(Subscriber.getDBKey(streamId, subscriberId));
+	}
+
+	@Override
+	public boolean resetSubscribersConnectedStatus() {
+		for(Subscriber subscriber: subscriberMap.values()) {
+			if (subscriber != null) {
+				subscriber.setConnected(false);
+				subscriber.setCurrentConcurrentConnections(0);
+			}
+		}
+		return true;
+	}	
+
+	public List<StreamInfo> getStreamInfoList(String streamId) {
+		return new ArrayList<>();
+	}
+
+	public void clearStreamInfoList(String streamId) {
+		//used in mongo for cluster mode. useless here.
+	}
+
+	@Override
+	public boolean setMp4Muxing(String streamId, int enabled) {
+		boolean result = false;
+
+		if (streamId != null) {
+			Broadcast broadcast = broadcastMap.get(streamId);
+			if (broadcast != null && (enabled == MuxAdaptor.RECORDING_ENABLED_FOR_STREAM || enabled == MuxAdaptor.RECORDING_NO_SET_FOR_STREAM || enabled == MuxAdaptor.RECORDING_DISABLED_FOR_STREAM)) {
+				broadcast.setMp4Enabled(enabled);
+				broadcastMap.replace(streamId, broadcast);
+				result = true;
+			}
+		}
+
+		return result;
+	}
+
+	@Override
+	public boolean setWebMMuxing(String streamId, int enabled) {
+		boolean result = false;
+
+		if (streamId != null) {
+			Broadcast broadcast = broadcastMap.get(streamId);
+			if (broadcast != null && (enabled == MuxAdaptor.RECORDING_ENABLED_FOR_STREAM || enabled == MuxAdaptor.RECORDING_NO_SET_FOR_STREAM || enabled == MuxAdaptor.RECORDING_DISABLED_FOR_STREAM)) {
+				broadcast.setWebMEnabled(enabled);
+				broadcastMap.replace(streamId, broadcast);
+				result = true;
+			}
+		}
+
+		return result;
+	}
+
+	@Override
+	public void saveStreamInfo(StreamInfo streamInfo) {
+		//no need to implement this method, it is used in cluster mode
+	}
+
+	@Override
+	public boolean deleteToken(String tokenId) {
+
+		return tokenMap.remove(tokenId) != null;
+
+	}
+
+	@Override
+	public Token getToken(String tokenId) {
+
+		return tokenMap.get(tokenId);
+
+	}
+
+	@Override
+	public boolean createP2PConnection(P2PConnection conn) {
+		// No need to implement. It used in cluster mode
+		return false;
+	}
+
+	@Override
+	public boolean deleteP2PConnection(String streamId) {
+		// No need to implement. It used in cluster mode
+		return false;
+	}
+
+	@Override
+	public P2PConnection getP2PConnection(String streamId) {
+		// No need to implement. It used in cluster mode
+		return null;
+	}
+
+	@Override
+	public boolean addSubTrack(String mainTrackId, String subTrackId) {
+		boolean result = false;
+		Broadcast mainTrack = broadcastMap.get(mainTrackId);
+		if (mainTrack != null && subTrackId != null) {
+			List<String> subTracks = mainTrack.getSubTrackStreamIds();
+
+			if (subTracks == null) {
+				subTracks = new ArrayList<>();
+			}
+
+			if (!subTracks.contains(subTrackId)) 
+			{
+				subTracks.add(subTrackId);
+				mainTrack.setSubTrackStreamIds(subTracks);
+				broadcastMap.put(mainTrackId, mainTrack);
+			}
+			result = true;
+
+		}
+		return result;
+	}
+
+	@Override
+	public boolean removeSubTrack(String mainTrackId, String subTrackId) {
+		boolean result = false;
+		Broadcast mainTrack = broadcastMap.get(mainTrackId);
+		if (mainTrack != null && subTrackId != null) {
+			List<String> subTracks = mainTrack.getSubTrackStreamIds();
+			if(subTracks.remove(subTrackId)) {
+				mainTrack.setSubTrackStreamIds(subTracks);
+				broadcastMap.put(mainTrackId, mainTrack);
+				result = true;
+			}
+		}
+		return result;
+	}
+
+	@Override
+	public int resetBroadcasts(String hostAddress) {
+		Set<Entry<String,Broadcast>> entrySet = broadcastMap.entrySet();
+
+		Iterator<Entry<String, Broadcast>> iterator = entrySet.iterator();
+		int i = 0;
+		while (iterator.hasNext()) {
+			Entry<String, Broadcast> next = iterator.next();
+			if (next.getValue().isZombi()) {
+				iterator.remove();
+				i++;
+			}
+			if (next.getValue().getStatus().equals(IAntMediaStreamHandler.BROADCAST_STATUS_BROADCASTING) ||
+					next.getValue().getStatus().equals(IAntMediaStreamHandler.BROADCAST_STATUS_PREPARING))
+			{
+				next.getValue().setStatus(IAntMediaStreamHandler.BROADCAST_STATUS_FINISHED);
+				next.getValue().setWebRTCViewerCount(0);
+				next.getValue().setHlsViewerCount(0);
+				next.getValue().setRtmpViewerCount(0);
+				i++;
+			}
+		}
+
+
+		return i;
+	}
+
+	@Override
+	public int getTotalWebRTCViewersCount() {
+		long now = System.currentTimeMillis();
+		if(now - totalWebRTCViewerCountLastUpdateTime > TOTAL_WEBRTC_VIEWER_COUNT_CACHE_TIME) {
+			int total = 0;
+			for (Broadcast broadcast : broadcastMap.values()) {
+				total += broadcast.getWebRTCViewerCount();
+			}
+			totalWebRTCViewerCount = total;
+			totalWebRTCViewerCountLastUpdateTime = now;
+		}  
+		return totalWebRTCViewerCount;
+	}
+
+	@Override
+	public void saveViewerInfo(WebRTCViewerInfo info) {
+		webRTCViewerMap.put(info.getViewerId(), info);
+	}
+
+	public List<WebRTCViewerInfo> getWebRTCViewerList(int offset, int size, String sortBy, String orderBy,
+			String search) {
+
+		Collection<WebRTCViewerInfo> values = webRTCViewerMap.values();
+
+		ArrayList<WebRTCViewerInfo> list = new ArrayList<>();
+
+
+		for (WebRTCViewerInfo info : values)
+		{
+			list.add(info);
+		}
+
+		if(search != null && !search.isEmpty()){
+			logger.info("server side search called for Conference Room = {}", search);
+			list = searchOnWebRTCViewerInfo(list, search);
+		}
+		return sortAndCropWebRTCViewerInfoList(list, offset, size, sortBy, orderBy);
+	}
+
+	@Override
+	public boolean deleteWebRTCViewerInfo(String viewerId) {
+		webRTCViewerMap.remove(viewerId);
+		return true;
+	}
+
+	@Override
+	public boolean updateStreamMetaData(String streamId, String metaData) {
+		Broadcast broadcast = broadcastMap.get(streamId);
+		boolean result = false;
+		if (broadcast != null) {
+			broadcast.setMetaData(metaData);
+			broadcastMap.put(streamId, broadcast);
+			result = true;
+		}
+		return result;
+	}
+
+	@Override
+	public SubscriberMetadata getSubscriberMetaData(String subscriberId) {
+		return subscriberMetadataMap.get(subscriberId);
+	}
+
+	@Override
+	public void putSubscriberMetaData(String subscriberId, SubscriberMetadata subscriberMetadata) {
+		subscriberMetadata.setSubscriberId(subscriberId);
+		subscriberMetadataMap.put(subscriberId, subscriberMetadata);
+	}
+
+	@Override
+	public void migrateConferenceRoomsToBroadcasts() {
+		//no need to implement
+	}
+
+	@Override
+	public List<Broadcast> getSubtracks(String mainTrackId, int offset, int size, String role) {
+		return getSubtracks(mainTrackId, offset, size, role, null);
+	}
+
+	@Override
+	public List<Broadcast> getSubtracks(String mainTrackId, int offset, int size, String role, String status) {
+		List<Broadcast> subtracks = new ArrayList<>();
+		for (Broadcast broadcast : broadcastMap.values()) 
+		{
+			if (mainTrackId.equals(broadcast.getMainTrackStreamId())  
+					&& (StringUtils.isBlank(role) || role.equals(broadcast.getRole()))
+					&& (StringUtils.isBlank(status) || status.equals(broadcast.getStatus()))) {
+				subtracks.add(broadcast);
+			}
+		}
+		return subtracks.subList(offset, Math.min(offset + size, subtracks.size()));
+	}
+
+	@Override
+	public long getSubtrackCount(@Nonnull String mainTrackId, String role, String status) {
+		int count = 0;
+		for (Broadcast broadcast : broadcastMap.values()) 
+		{
+			if (mainTrackId.equals(broadcast.getMainTrackStreamId())  
+					&& (StringUtils.isBlank(role) || role.equals(broadcast.getRole()))
+					&& (StringUtils.isBlank(status) || status.equals(broadcast.getStatus()))) 
+			{
+				count++;
+			}
+		}
+		return count;
+	}
+
+	@Override
+	public long getActiveSubtracksCount(String mainTrackId, String role) {
+		int count = 0;
+		for (Broadcast broadcast : broadcastMap.values()) 
+		{
+			if (mainTrackId.equals(broadcast.getMainTrackStreamId())  
+					&& (StringUtils.isBlank(role) || role.equals(broadcast.getRole()))
+					&& (AntMediaApplicationAdapter.isStreaming(broadcast.getStatus()))) 
+			{
+				count++;
+			}
+		}
+		return count;
+	}
+
+	@Override
+	public List<Broadcast> getActiveSubtracks(String mainTrackId, String role) 
+	{
+		List<Broadcast> subtracks = new ArrayList<>();
+		for (Broadcast broadcast : broadcastMap.values()) 
+		{
+			if (mainTrackId.equals(broadcast.getMainTrackStreamId())  
+					&& (StringUtils.isBlank(role) || role.equals(broadcast.getRole()))
+					&& (AntMediaApplicationAdapter.isStreaming(broadcast.getStatus()))) 
+			{
+				subtracks.add(broadcast);
+			}
+		}
+		return subtracks;
+	}
+
+	@Override
+	public boolean hasSubtracks(String streamId) {
+
+		for (Broadcast broadcast : broadcastMap.values()) 
+		{
+			if (streamId.equals(broadcast.getMainTrackStreamId()) ) 
+			{
+				return true;
+			}
+		}
+		return false;
+	}
 }

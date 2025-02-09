@@ -18,27 +18,29 @@
 
 package org.red5.server;
 
-import static org.bytedeco.javacpp.avformat.av_register_all;
-
 import java.io.File;
 import java.io.IOException;
+import java.net.NetworkInterface;
+import java.net.SocketException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
-import java.util.Timer;
-import java.util.TimerTask;
+import java.security.MessageDigest;
+import java.util.Base64;
+import java.util.Enumeration;
 import java.util.UUID;
 
-import org.bytedeco.javacpp.avformat;
+import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.red5.logging.Red5LoggerFactory;
 import org.red5.server.api.Red5;
 import org.slf4j.Logger;
-import org.slf4j.bridge.SLF4JBridgeHandler;
 import org.springframework.context.support.FileSystemXmlApplicationContext;
-
-import com.brsanthu.googleanalytics.GoogleAnalytics;
+import org.webrtc.PeerConnectionFactory;
 
 import io.antmedia.AntMediaApplicationAdapter;
-import io.antmedia.rest.BroadcastRestService;
+import io.antmedia.AsciiArt;
+import io.antmedia.console.rest.CommonRestService;
+import io.antmedia.rest.RestServiceBase;
 
 /**
  * Launches Red5.
@@ -48,10 +50,11 @@ import io.antmedia.rest.BroadcastRestService;
  */
 public class Launcher {
 
-
-	private String instanceId;
-	
-	
+	public static final String RED5_ROOT = "red5.root";
+	private static Logger logger;
+	private static String instanceId = null;
+	private static String implementationVersion;
+	private static String versionType = null;  //community or enterprise
 
 	/**
 	 * Launch Red5 under it's own classloader
@@ -59,33 +62,25 @@ public class Launcher {
 	 * @throws Exception
 	 *             on error
 	 */
-	public void launch() throws Exception {
+	public void launch()  {
 
-
-
-		av_register_all();
-		avformat.avformat_network_init();
-		System.out.printf("Root: %s%nDeploy type: %s%n", System.getProperty("red5.root"), System.getProperty("red5.deployment.type"));
 		// check for the logback disable flag
-		boolean useLogback = Boolean.valueOf(System.getProperty("useLogback", "true"));
-		if (useLogback) {
-			// check for context selector in system properties
-			if (System.getProperty("logback.ContextSelector") == null) {
-				// set our selector
-				System.setProperty("logback.ContextSelector", "org.red5.logging.LoggingContextSelector");
-			}
+		boolean useLogback = Boolean.parseBoolean(System.getProperty("useLogback", "true"));
+		if (useLogback && System.getProperty("logback.ContextSelector") == null) {
+			// set our selector
+			System.setProperty("logback.ContextSelector", "org.red5.logging.LoggingContextSelector");
 		}
+
 		Red5LoggerFactory.setUseLogback(useLogback);
-		// install the slf4j bridge (mostly for JUL logging)
-		SLF4JBridgeHandler.install();
-		// log stdout and stderr to slf4j
-		//SysOutOverSLF4J.sendSystemOutAndErrToSLF4J();
+
 		// get the first logger
-		Logger log = Red5LoggerFactory.getLogger(Launcher.class);
+		final Logger log = Red5LoggerFactory.getLogger(Launcher.class);
+		setLog(log);
+
 		// version info banner
-		String implementationVersion = AntMediaApplicationAdapter.class.getPackage().getImplementationVersion();
-		String type = BroadcastRestService.isEnterprise() ? "Enterprise" : "Community";
-		log.info("Ant Media Server {} {}", type, implementationVersion);
+		log.info("Ant Media Server {} {}", getVersionType(), getVersion());
+		printLogo();
+
 		if (log.isDebugEnabled()) {
 			log.debug("fmsVer: {}", Red5.getFMSVersion());
 		}
@@ -94,96 +89,114 @@ public class Launcher {
 		FileSystemXmlApplicationContext root = new FileSystemXmlApplicationContext(new String[] { "classpath:/red5.xml" }, false);
 		// set the current threads classloader as the loader for the factory/appctx
 		root.setClassLoader(Thread.currentThread().getContextClassLoader());
-		root.setId("red5.root");
-		root.setBeanName("red5.root");
-		String path = System.getProperty("red5.root");
-		File idFile = new File(path + "/conf/instanceId");
-		instanceId = null;
-		if (idFile.exists()) {
-			instanceId = getFileContent(idFile.getAbsolutePath());
-		}
-		else {
-			instanceId =  UUID.randomUUID().toString();
-			writeToFile(idFile.getAbsolutePath(), instanceId);
-		}
+		root.setId(RED5_ROOT);
+		root.setBeanName(RED5_ROOT);
 
-
-		Timer heartbeat = new Timer("heartbeat", true);
-		heartbeat.schedule(new TimerTask() {
-			
-			@Override
-			public void run() {
-				getGoogleAnalytic(implementationVersion, type).screenView()
-			    		.sessionControl("start")
-			    		.clientId(instanceId)
-			    		.send();
-			}
-		}, 0);
-		
-		heartbeat.scheduleAtFixedRate(new TimerTask() {
-			
-			@Override
-			public void run() {
-				
-				System.out.println("-Heartbeat-");
-				getGoogleAnalytic(implementationVersion, type).event()
-					.eventCategory("server_status")
-					.eventAction("heartbeat")
-					.eventLabel("")
-					.clientId(instanceId)
-					.send();
-				
-			}
-		}, 300000, 300000);
-		
-
-		
-		
 		// refresh must be called before accessing the bean factory
 		log.trace("Refreshing root server context");
 		root.refresh();
 		log.trace("Root server context refreshed");
 		log.debug("Launcher exit");
+		PeerConnectionFactory.initialize(
+				PeerConnectionFactory.InitializationOptions.builder()
+				.setFieldTrials(null)
+				.createInitializationOptions());
 
-		Runtime.getRuntime().addShutdownHook(new Thread() {
-
-			@Override
-			public void run() {
-				System.out.println("Shutting down just a sec");
-				getGoogleAnalytic(implementationVersion, type).screenView()
-					.clientId(instanceId)
-					.sessionControl("end")
-					.send();
-
-			}
-		});
 	}
 
-	private GoogleAnalytics getGoogleAnalytic(String implementationVersion, String type) {
-		return GoogleAnalytics.builder()
-		.withAppVersion(implementationVersion)
-		.withAppName(type)
-		.withTrackingId("UA-93263926-3").build();
-		
+
+	public void printLogo() {
+		logger.info("\n {}", AsciiArt.LOGO);
 	}
 
-	public void writeToFile(String absolutePath, String content) {
+
+	public static void writeToFile(String absolutePath, String content) {
 		try {
 			Files.write(new File(absolutePath).toPath(), content.getBytes(), StandardOpenOption.CREATE);
 		} catch (IOException e) {
-			e.printStackTrace();
+			if (logger != null) {
+				logger.error(e.toString());
+			}
 		}
-		
+
 	}
 
-	public String getFileContent(String path) {
+	public static String getFileContent(String path) {
 		try {
 			byte[] data = Files.readAllBytes(new File(path).toPath());
 			return new String(data);
 		} catch (IOException e) {
-			e.printStackTrace();
+			logger.error(e.toString());	
 		}
 		return null;
+	}
+
+	private static byte[] getMacAddress(NetworkInterface networkInterface) {
+		byte[] macAddressBytes = null;
+		try {
+			if (!networkInterface.isVirtual() && !networkInterface.isLoopback()) {
+				macAddressBytes = networkInterface.getHardwareAddress();
+			}
+
+		} catch (SocketException e) {
+			logger.error(ExceptionUtils.getStackTrace(e));
+		}
+		return macAddressBytes;
+	}
+
+	private static String getHashInstanceId() {
+		StringBuilder instanceId = new StringBuilder();
+		try {
+
+			Enumeration<NetworkInterface> networks = NetworkInterface.getNetworkInterfaces();
+			while (networks.hasMoreElements()) {
+				NetworkInterface network = networks.nextElement();
+				byte[] mac = getMacAddress(network);
+				if (mac != null) {
+
+					for (byte b : mac) {
+						instanceId.append(String.format("%02X:", b));
+					}
+					if (instanceId.length() > 0) {
+						instanceId.deleteCharAt(instanceId.length() - 1); // Remove trailing colon
+					}
+					break;
+				}
+			}
+		} catch (Exception e) {
+			logger.error(e.toString());
+		}
+
+		if (instanceId.length() == 0) {
+			instanceId.append(UUID.randomUUID().toString());
+		}
+		
+		return CommonRestService.getMD5Hash(instanceId.toString());
+	}
+
+	public static String getInstanceId() {
+		if (instanceId == null) {			
+			instanceId = getHashInstanceId();
+		}
+		return instanceId;
+	}
+
+	public static void setLog(Logger log) {
+		Launcher.logger = log;
+	}
+
+	public static String getVersion() {
+		if (implementationVersion == null) {
+			implementationVersion = AntMediaApplicationAdapter.class.getPackage().getImplementationVersion();
+		}
+		return implementationVersion;
+	}
+
+	public static String getVersionType() {
+		if (versionType == null) {
+			versionType = RestServiceBase.isEnterprise() ? "Enterprise" : "Community";
+		}
+		return versionType;
 	}
 
 }
